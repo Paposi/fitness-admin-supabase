@@ -8,8 +8,8 @@ from dateutil.relativedelta import relativedelta
 
 # --- CONFIG SUPABASE ---
 # ตั้งค่าเชื่อมต่อฐานข้อมูลของคุณ
-SUPABASE_URL = "https://obyhjqoiqxewmvkpvmiu.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ieWhqcW9pcXhld212a3B2bWl1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMzkyNjksImV4cCI6MjA5NzcxNTI2OX0.Fq0u1UE3K7fyx1DiqfPKF5n7MMRsKf4LWqTihBHpwhA"
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==========================================
