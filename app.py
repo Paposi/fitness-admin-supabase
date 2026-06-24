@@ -41,7 +41,8 @@ def clean_date_string(raw_val):
     return val_str
 
 # 🚀 โหลดข้อมูลตรงจาก Supabase (ทำงานเร็วมาก)
-@st.cache_data
+# 🌟 เพิ่ม ttl=10 (วินาที) เพื่อให้แอปล้างความจำตัวเองและไปดึงข้อมูลใหม่เมื่อกดรีเฟรชหน้าเว็บ
+@st.cache_data(ttl=10)
 def load_data_from_supabase(table_name):
     try:
         response = supabase.table(table_name).select("*").execute()
@@ -314,17 +315,23 @@ if choice == "👥 สมัครสมาชิก & เพิ่มคอร�
             st.table(pd.DataFrame(table_data))
 
 # ==========================================
-# 2. หน้าจัดการคลาสและแก้ไขข้อมูลคอร์ส
+# 2. หน้าจัดการคลาสและแก้ไขข้อมูลคอร์ส/สมาชิก (อัปเดตใหม่)
 # ==========================================
 elif choice == "🛠️ การจัดการคลาส":
-    st.header("🛠️ การจัดการคลาสและแก้ไขข้อมูลคอร์สผสม")
+    st.header("🛠️ การจัดการคลาส แก้ไขข้อมูล และลบรายการ")
     if not df_courses.empty:
         df_courses.columns = [c.strip() for c in df_courses.columns]
         df_members_clean = df_members[["member_id", "name", "phone"]].copy()
         df_members_clean["member_id"] = df_members_clean["member_id"].astype(str).str.strip()
         df_courses["member_id"] = df_courses["member_id"].astype(str).str.strip()
         
-        df_merged = df_courses.merge(df_members_clean, on="member_id", how="left")
+        # แสดงเฉพาะคอร์สที่ไม่ได้ถูกลบ
+        if "is_deleted" in df_courses.columns:
+            df_display_c = df_courses[df_courses["is_deleted"].astype(str).str.strip() == "0"].copy()
+        else:
+            df_display_c = df_courses.copy()
+            
+        df_merged = df_display_c.merge(df_members_clean, on="member_id", how="left")
         df_merged["member_id_int"] = df_merged["member_id"].astype(int)
         df_merged = df_merged.sort_values(by="member_id_int")
         
@@ -342,34 +349,96 @@ elif choice == "🛠️ การจัดการคลาส":
         st.table(pd.DataFrame(table_data))
         
         st.markdown("---")
-        st.subheader("📝 แก้ไขสิทธิ์และวันหมดอายุรายคอร์ส")
-        col_e1, col_e2 = st.columns(2)
-        with col_e1:
-            edit_id = st.number_input("ระบุ Course ID ที่ต้องการแก้ไข", min_value=1, step=1)
         
-        target = df_courses[df_courses['course_id'].astype(int) == int(edit_id)]
-        if not target.empty:
-            with col_e2:
-                new_p = st.number_input("แก้สิทธิ์คงเหลือ Private", value=int(float(target['rem_private'].iloc[0])))
-                new_d = st.number_input("แก้สิทธิ์คงเหลือ Duo", value=int(float(target['rem_duo'].iloc[0])))
-                new_g = st.number_input("แก้สิทธิ์คงเหลือ Group", value=int(float(target['rem_group'].iloc[0])))
-                new_expiry = st.date_input("วันหมดอายุใหม่", value=pd.to_datetime(target['expiry_date'].iloc[0]))
+        # 🌟 แบ่งหน้าแก้ไขเป็น 3 แท็บ เพื่อความสวยงามและเป็นระเบียบ
+        tab_course_edit, tab_course_del, tab_member_edit = st.tabs([
+            "📝 แก้ไขสิทธิ์คอร์ส", "🗑️ ลบคอร์สเรียน", "👤 แก้ไขข้อมูลสมาชิก"
+        ])
+        
+        # --- TAB 1: แก้ไขคอร์ส ---
+        with tab_course_edit:
+            st.subheader("📝 แก้ไขสิทธิ์และวันหมดอายุรายคอร์ส")
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                edit_id = st.number_input("ระบุ Course ID ที่ต้องการแก้ไข", min_value=1, step=1, key="edit_c_id")
             
-            if st.button("✅ ยืนยันการแก้ไขข้อมูลคอร์ส"):
-                try:
-                    supabase.table("courses").update({
-                        "rem_private": new_p,
-                        "rem_duo": new_d,
-                        "rem_group": new_g,
-                        "expiry_date": new_expiry.strftime('%Y-%m-%d')
-                    }).eq("course_id", int(edit_id)).execute()
-                    st.cache_data.clear()
-                    st.success("✅ อัปเดตสิทธิ์ผสมของคอร์สเรียบร้อยแล้ว!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ เกิดข้อผิดพลาด: {e}")
-        else:
-            st.info("ระบุ Course ID ด้านบนเพื่อเริ่มการแก้ไข")
+            target = df_courses[df_courses['course_id'].astype(int) == int(edit_id)]
+            if not target.empty:
+                with col_e2:
+                    new_p = st.number_input("แก้สิทธิ์คงเหลือ Private", value=int(float(target['rem_private'].iloc[0])))
+                    new_d = st.number_input("แก้สิทธิ์คงเหลือ Duo", value=int(float(target['rem_duo'].iloc[0])))
+                    new_g = st.number_input("แก้สิทธิ์คงเหลือ Group", value=int(float(target['rem_group'].iloc[0])))
+                    new_expiry = st.date_input("วันหมดอายุใหม่", value=pd.to_datetime(target['expiry_date'].iloc[0]))
+                
+                if st.button("✅ ยืนยันการแก้ไขข้อมูลคอร์ส"):
+                    try:
+                        supabase.table("courses").update({
+                            "rem_private": new_p,
+                            "rem_duo": new_d,
+                            "rem_group": new_g,
+                            "expiry_date": new_expiry.strftime('%Y-%m-%d')
+                        }).eq("course_id", int(edit_id)).execute()
+                        st.cache_data.clear()
+                        st.success("✅ อัปเดตสิทธิ์ผสมของคอร์สเรียบร้อยแล้ว!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ เกิดข้อผิดพลาด: {e}")
+            else:
+                st.info("ระบุ Course ID ด้านบนเพื่อเริ่มการแก้ไข")
+
+        # --- TAB 2: ลบคอร์ส (ใหม่) ---
+        with tab_course_del:
+            st.subheader("🗑️ ลบคอร์สเรียนออกจากระบบ")
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                del_c_id = st.number_input("ระบุ Course ID ที่ต้องการลบทิ้ง", min_value=1, step=1, key="del_c_id")
+            
+            target_del = df_courses[df_courses['course_id'].astype(int) == int(del_c_id)]
+            if not target_del.empty:
+                st.warning(f"⚠️ คุณกำลังจะลบคอร์ส: **{target_del['course_name'].iloc[0]}**")
+                if st.button("🚨 ยืนยันการลบคอร์สถาวร", type="primary"):
+                    try:
+                        # สามารถใช้คำสั่ง delete() ตรงๆ หรือเปลี่ยนสถานะ is_deleted = 1
+                        supabase.table("courses").delete().eq("course_id", int(del_c_id)).execute()
+                        st.cache_data.clear()
+                        st.success("🗑️ ลบคอร์สเรียบร้อยแล้ว!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ เกิดข้อผิดพลาดในการลบ: {e}")
+            else:
+                st.info("ระบุ Course ID เพื่อค้นหาและลบคอร์ส")
+
+        # --- TAB 3: แก้ไขข้อมูลสมาชิก (ใหม่) ---
+        with tab_member_edit:
+            st.subheader("👤 แก้ไขชื่อและเบอร์โทรศัพท์ของลูกค้า")
+            if not df_members.empty:
+                if "is_deleted" in df_members.columns:
+                    active_m = df_members[df_members["is_deleted"].astype(str).str.strip() == "0"]
+                else:
+                    active_m = df_members
+                    
+                m_edit_options = {f"ID {r['member_id']}: คุณ {r['name']}": r for _, r in active_m.iterrows()}
+                selected_edit_m = st.selectbox("เลือกสมาชิกที่ต้องการแก้ไขข้อมูล", ["-- กรุณาเลือก --"] + list(m_edit_options.keys()))
+                
+                if selected_edit_m != "-- กรุณาเลือก --":
+                    target_m = m_edit_options[selected_edit_m]
+                    with st.form("edit_member_form"):
+                        new_name = st.text_input("ชื่อ-นามสกุลใหม่", value=target_m['name'])
+                        new_phone = st.text_input("เบอร์โทรศัพท์ใหม่", value=target_m.get('phone', ''))
+                        
+                        submit_edit_m = st.form_submit_button("💾 บันทึกข้อมูลสมาชิก")
+                        
+                        if submit_edit_m:
+                            try:
+                                supabase.table("members").update({
+                                    "name": new_name.strip(),
+                                    "phone": new_phone.strip()
+                                }).eq("member_id", int(target_m['member_id'])).execute()
+                                st.cache_data.clear()
+                                st.success("✅ อัปเดตข้อมูลสมาชิกเรียบร้อยแล้ว!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
 # ==========================================
 # 3. หน้าจัดการตารางคลาสเรียน
