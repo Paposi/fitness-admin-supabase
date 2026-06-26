@@ -13,23 +13,32 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==========================================
-# 🚀 ระบบป้องกัน Supabase หลับ (Keep-Alive สำหรับ Free Tier)
+# 🚀 ระบบป้องกัน Supabase หลับ & Auto-Cleanup (ลบ Waiting List หมดอายุ)
 # ==========================================
-def keep_supabase_awake():
+def initial_system_maintenance():
     try:
-        # ยิงคำสั่งไปดึงข้อมูล 1 แถวแบบเบาที่สุด เพื่อกระตุ้นให้ Supabase ทำงาน
+        # 1. ยิงคำสั่งไปดึงข้อมูล 1 แถวแบบเบาที่สุด เพื่อกระตุ้นให้ Supabase ทำงาน
         supabase.table("members").select("member_id").limit(1).execute()
+        
+        # 2. ระบบ Auto-Cleanup: ลบรายชื่อ Waiting List ของวันที่ผ่านไปแล้วโดยไม่ตัดสิทธิ์
+        today_str = datetime.date.today().strftime('%Y-%m-%d')
+        supabase.table("attendance").delete().eq("booking_status", "Waitlisted").lt("checkin_date", today_str).execute()
     except Exception:
         pass
 
 # สั่งกระตุ้นทันทีที่แอปถูกโหลด
-keep_supabase_awake()
+initial_system_maintenance()
 # ==========================================
 
 # --- CONFIG หน้าเว็บ ---
 st.set_page_config(
     page_title="Fitness Admin System Ultra Pro", page_icon="🏋️‍♂️", layout="wide"
 )
+
+# 🔔 แสดงแจ้งเตือนเมื่อมีการเลื่อนคิวอัตโนมัติ (Auto-Promotion)
+if "waitlist_promoted_msg" in st.session_state:
+    st.success(st.session_state["waitlist_promoted_msg"], icon="🔔")
+    del st.session_state["waitlist_promoted_msg"]
 
 def clean_date_string(raw_val):
     if pd.isna(raw_val) or not raw_val:
@@ -41,7 +50,6 @@ def clean_date_string(raw_val):
     return val_str
 
 # 🚀 โหลดข้อมูลตรงจาก Supabase (ทำงานเร็วมาก)
-# 🌟 เพิ่ม ttl=10 (วินาที) เพื่อให้แอปล้างความจำตัวเองและไปดึงข้อมูลใหม่เมื่อกดรีเฟรชหน้าเว็บ
 @st.cache_data(ttl=10)
 def load_data_from_supabase(table_name):
     try:
@@ -577,7 +585,9 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
         booking_counts = {}
         if not df_attendance_check.empty:
             df_attendance_check["class_id_str"] = df_attendance_check["class_id"].astype(str).str.strip()
-            booking_counts = df_attendance_check["class_id_str"].value_counts().to_dict()
+            # กรองนับเฉพาะตัวจริง
+            df_attendance_check["booking_status"] = df_attendance_check.get("booking_status", pd.Series(["Confirmed"] * len(df_attendance_check))).fillna("Confirmed")
+            booking_counts = df_attendance_check[df_attendance_check["booking_status"] == "Confirmed"]["class_id_str"].value_counts().to_dict()
             
         classes_by_date = {}
         for _, row in df_classes_check.iterrows():
@@ -624,7 +634,7 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                                 📌 {c_row.get('class_name','')}<br>
                                 👤 ครู: {c_row.get('instructor','')}<br>
                                 🎯 หมวด: {target_class_type}<br>
-                                <small style='color:#444; font-weight:bold;'>👥 จองแล้ว: {current_bookings}/{max_capacity} คน</small>
+                                <small style='color:#444; font-weight:bold;'>👥 ตัวจริง: {current_bookings}/{max_capacity} คน</small>
                             </div>
                             """, unsafe_allow_html=True)
                             
@@ -641,10 +651,10 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                                         st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
 # ==========================================
-# 4. หน้าเช็กอินเข้าเรียน 
+# 4. หน้าเช็กอินเข้าเรียน (อัปเดตระบบ Waitlist)
 # ==========================================
 elif choice == "🎟️ เช็กอินเข้าเรียน (Auto FIFO)":
-    st.header("🎟️ ระบบปฏิทินเช็กอินและยกเลิกแยกตามประเภทคลาสของคอร์สผสม")
+    st.header("🎟️ ระบบปฏิทินเช็กอินและคิวสำรอง (Waiting List)")
     if df_members.empty or df_courses.empty:
         st.warning("⚠️ ในระบบต้องมีประวัติสมาชิกและคอร์สเรียนก่อนทำรายการ")
     else:
@@ -669,7 +679,7 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                     st.session_state["cal_shift_checkin"] -= 1; st.rerun()
             else: st.button("◀️ เดือนก่อนหน้า ", disabled=True, use_container_width=True)
                 
-        with col_cbtn2: st.subheader(f"📅 2. ตารางปฏิทินระบุสถานะคลาสเรียนของคุณ {m_data['name']} ({view_date_checkin.strftime('%B %Y')})")
+        with col_cbtn2: st.subheader(f"📅 2. ตารางปฏิทินของ คุณ {m_data['name']} ({view_date_checkin.strftime('%B %Y')})")
             
         with col_cbtn3:
             if st.session_state["cal_shift_checkin"] < 1:
@@ -686,19 +696,32 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
             df_classes_all.columns = [c.strip() for c in df_classes_all.columns]
             df_classes_all["clean_date"] = df_classes_all["class_date"].apply(clean_date_string)
             
-            booking_counts_checkin = {}
+            # 🌟 จัดการข้อมูล Attendance (รอรับคอลัมน์ใหม่ booking_status)
+            class_stats = {}
             user_bookings_map = {}
             
             if not df_attendance.empty:
                 df_attendance.columns = [c.strip() for c in df_attendance.columns]
+                # Default เป็น Confirmed หากยังไม่มีข้อมูล
+                df_attendance["booking_status"] = df_attendance.get("booking_status", pd.Series(["Confirmed"] * len(df_attendance))).fillna("Confirmed")
+                
                 df_attendance["clean_att_date"] = df_attendance["checkin_date"].apply(clean_date_string)
                 df_attendance["class_id_str"] = df_attendance["class_id"].astype(str).str.strip()
                 df_attendance["member_id_str"] = df_attendance["member_id"].astype(str).str.strip()
                 
-                booking_counts_checkin = df_attendance["class_id_str"].value_counts().to_dict()
-                user_atts = df_attendance[df_attendance["member_id_str"] == m_id.strip()]
-                for _, att_row in user_atts.iterrows():
-                    user_bookings_map[att_row["class_id_str"]] = att_row
+                # นับสถิติแยกตามคลาส (ตัวจริง vs คิวสำรอง)
+                for _, att_row in df_attendance.iterrows():
+                    c_id_stat = att_row["class_id_str"]
+                    b_status = att_row["booking_status"]
+                    
+                    if c_id_stat not in class_stats:
+                        class_stats[c_id_stat] = {"conf": 0, "wait": 0}
+                        
+                    if b_status == "Waitlisted": class_stats[c_id_stat]["wait"] += 1
+                    else: class_stats[c_id_stat]["conf"] += 1
+                    
+                    if att_row["member_id_str"] == m_id.strip():
+                        user_bookings_map[c_id_stat] = att_row
 
             classes_by_date_checkin = {}
             for _, row in df_classes_all.iterrows():
@@ -731,29 +754,50 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                 cls_id = str(int(float(str(c_row["class_id"]))))
                                 target_class_type = str(c_row["class_type"]).strip()
                                 
-                                max_capacity = 10  
+                                # 🌟 กำหนดความจุ (รวมคิวสำรอง)
+                                max_capacity = 10
+                                max_waitlist = 0
                                 if "Private" in target_class_type or "เดี่ยว" in target_class_type: max_capacity = 1
                                 elif "Duo" in target_class_type or "คู่" in target_class_type: max_capacity = 1
-                                elif "Group" in target_class_type or "กลุ่ม" in target_class_type: max_capacity = 4
+                                elif "Group" in target_class_type or "กลุ่ม" in target_class_type: 
+                                    max_capacity = 4
+                                    max_waitlist = 2
                                     
-                                current_bookings_count = booking_counts_checkin.get(cls_id, 0)
+                                current_stats = class_stats.get(cls_id, {"conf": 0, "wait": 0})
+                                conf_count = current_stats["conf"]
+                                wait_count = current_stats["wait"]
+                                
                                 is_booked = cls_id in user_bookings_map
                                 booked_att_id = None
                                 booked_course_id = None
+                                user_book_status = None
                                 
                                 if is_booked:
                                     user_att_row = user_bookings_map[cls_id]
                                     booked_att_id = int(float(str(user_att_row["attendance_id"])))
                                     booked_course_id = int(float(str(user_att_row["course_id"])))
+                                    user_book_status = user_att_row.get("booking_status", "Confirmed")
 
-                                if current_bookings_count >= max_capacity and not is_booked:
+                                # ซ่อนคลาสถ้าเต็มทั้งตัวจริงและสำรอง (และผู้ใช้ไม่ได้จองอยู่)
+                                if conf_count >= max_capacity and wait_count >= max_waitlist and not is_booked:
                                     continue  
 
-                                box_bg = "#C8E6C9" if is_booked else c_row.get("class_color", "#E3F2FD")
-                                if pd.isna(box_bg) or str(box_bg).strip() == "": box_bg = "#E3F2FD"
-                                border_color = "#388E3C" if is_booked else "#1E88E5"
+                                # 🌟 จัดการสีกล่องปฏิทิน
+                                box_bg = c_row.get("class_color", "#E3F2FD")
+                                border_color = "#1E88E5"
                                 
-                                capacity_text = f"👥 จองแล้ว: {current_bookings_count} / {max_capacity} คน"
+                                if is_booked:
+                                    if user_book_status == "Waitlisted":
+                                        box_bg = "#FFF9C4" # สีเหลืองสำหรับ Waitlist
+                                        border_color = "#FBC02D"
+                                    else:
+                                        box_bg = "#C8E6C9" # สีเขียวสำหรับตัวจริง
+                                        border_color = "#388E3C"
+                                elif pd.isna(box_bg) or str(box_bg).strip() == "": 
+                                    box_bg = "#E3F2FD"
+                                
+                                wait_txt = f" | ⏳ สำรอง: {wait_count}/{max_waitlist}" if max_waitlist > 0 else ""
+                                capacity_text = f"👥 ตัวจริง: {conf_count}/{max_capacity}{wait_txt}"
                                 
                                 st.markdown(f"""
                                 <div style='background-color:{box_bg}; font-size:11px; padding:6px; margin-top:5px; border-radius:4px; border-left:4px solid {border_color}; color:#000000; font-weight:500; line-height:1.3;'>
@@ -764,94 +808,150 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                 </div>
                                 """, unsafe_allow_html=True)
                                 
+                                # =========================
+                                # ปุ่มจัดการการจอง
+                                # =========================
                                 if is_booked:
-                                    if st.button("🗑️ ลบคืนสิทธิ์", key=f"del_{cls_id}_{week_idx}_{i}_{c_idx}", type="secondary"):
-                                        try:
-                                            supabase.table("attendance").delete().eq("attendance_id", booked_att_id).execute()
-                                            
-                                            slot_col = "rem_private"
-                                            if "Duo" in target_class_type or "คู่" in target_class_type: slot_col = "rem_duo"
-                                            if "Group" in target_class_type or "กลุ่ม" in target_class_type: slot_col = "rem_group"
-                                            
-                                            res = supabase.table("courses").select(slot_col).eq("course_id", booked_course_id).execute()
-                                            if res.data:
-                                                curr_slot = int(res.data[0][slot_col])
-                                                supabase.table("courses").update({slot_col: curr_slot + 1}).eq("course_id", booked_course_id).execute()
-                                            
-                                            st.cache_data.clear()
-                                            st.success("🔄 คืนสิทธิ์เข้าคอร์สผสมสำเร็จ!")
-                                            st.rerun()
-                                        except Exception as e:
-                                            st.error(f"❌ Error: {e}")
-                                else:
-                                    if st.button("🎟️ ตัดสิทธิ์", key=f"cut_{cls_id}_{week_idx}_{i}_{c_idx}", type="primary"):
-                                        df_courses.columns = [c.strip() for c in df_courses.columns]
-                                        
-                                        slot_col = "rem_private"
-                                        if "Duo" in target_class_type or "คู่" in target_class_type: slot_col = "rem_duo"
-                                        if "Group" in target_class_type or "กลุ่ม" in target_class_type: slot_col = "rem_group"
-                                        
-                                        valid_courses = df_courses[
-                                            (df_courses["member_id"].astype(str).str.strip() == m_id) & 
-                                            (df_courses[slot_col].astype(float) > 0) & 
-                                            (df_courses["status"].astype(str).str.strip().isin(["Active", "Inactive"])) & 
-                                            (df_courses["is_deleted"].astype(str).str.strip() == "0")
-                                        ].copy()
-                                        
-                                        if valid_courses.empty:
-                                            st.error(f"❌ ไม่มีโควตาสิทธิ์คงเหลือสำหรับ {target_class_type} ในคอร์สใดๆ ของลูกค้ารายนี้")
-                                        else:
-                                            valid_courses["clean_signup"] = valid_courses["signup_date"].apply(clean_date_string)
-                                            valid_courses = valid_courses.sort_values(by="clean_signup", ascending=True)
-                                            
-                                            target_course_to_cut = valid_courses.iloc[0]
-                                            c_id_to_cut = int(float(str(target_course_to_cut["course_id"])))
-                                            c_current_status = str(target_course_to_cut.get("status", "Inactive")).strip()
-                                            
-                                            try: active_duration_days = int(float(str(target_course_to_cut.get("active_duration", 30))))
-                                            except: active_duration_days = 30
-                                            
-                                            next_att_id = 1 if (df_attendance.empty or "attendance_id" not in df_attendance.columns) else int(pd.to_numeric(df_attendance["attendance_id"], errors='coerce').fillna(0).max()) + 1
-                                            new_slots = max(0, int(float(str(target_course_to_cut[slot_col]))) - 1)
-                                            
-                                            att_insert_data = {
-                                                "attendance_id": next_att_id,
-                                                "member_id": int(m_id),
-                                                "class_id": int(cls_id),
-                                                "checkin_date": day_str,
-                                                "course_id": c_id_to_cut
-                                            }
-                                            
-                                            if c_current_status == "Inactive":
-                                                @st.dialog("⚠️ ยืนยันการเปิดใช้งานคอร์สเรียนผสม")
-                                                def confirm_and_activate(att_data, c_id, s_col, n_slots, class_dt_str, days_limit):
-                                                    st.warning("💡 คอร์สผสมนี้ปัจจุบันมีสถานะเป็น Inactive")
-                                                    st.write(f"การเช็กอินเรียนคลาสนี้ในวันที่ **{class_dt_str}** จะเปิดการทำงานคอร์ส (Active) ทันที")
-                                                    class_date_obj = datetime.datetime.strptime(class_dt_str, "%Y-%m-%d").date()
-                                                    calculated_expiry = class_date_obj + datetime.timedelta(days=days_limit)
-                                                    st.info(f"📅 เริ่มนับเวลา **{days_limit} วัน** วันหมดอายุใหม่คือ: **{calculated_expiry.strftime('%Y-%m-%d')}**")
-                                                    
-                                                    if st.button("✅ ยืนยันเปิด Active และหักแต้ม", type="primary", use_container_width=True):
-                                                        try:
-                                                            supabase.table("attendance").insert(att_data).execute()
-                                                            supabase.table("courses").update({
-                                                                s_col: n_slots,
-                                                                "status": "Active",
-                                                                "expiry_date": calculated_expiry.strftime('%Y-%m-%d')
-                                                            }).eq("course_id", c_id).execute()
-                                                            st.cache_data.clear()
-                                                            st.balloons()
-                                                            st.rerun()
-                                                        except Exception as e:
-                                                            st.error(f"❌ Error: {e}")
+                                    # กรณีที่ 1: ลูกค้าอยู่ในคิวสำรอง
+                                    if user_book_status == "Waitlisted":
+                                        if st.button("🗑️ ยกเลิกคิว (Waitlist)", key=f"del_{cls_id}_{week_idx}_{i}_{c_idx}"):
+                                            try:
+                                                supabase.table("attendance").delete().eq("attendance_id", booked_att_id).execute()
+                                                st.cache_data.clear()
+                                                st.success("🗑️ ยกเลิกคิวสำรองสำเร็จ (ไม่ได้เสียสิทธิ์)")
+                                                st.rerun()
+                                            except Exception as e:
+                                                st.error(f"❌ Error: {e}")
+                                    
+                                    # กรณีที่ 2: ลูกค้าเป็นตัวจริง (กดยกเลิก -> คืนสิทธิ์ -> เลื่อนคิว)
+                                    else:
+                                        if st.button("🗑️ ยกเลิกคลาส (คืนสิทธิ์)", key=f"del_{cls_id}_{week_idx}_{i}_{c_idx}", type="secondary"):
+                                            try:
+                                                # 1. ลบตัวเองและคืนสิทธิ์ให้ตัวเอง
+                                                supabase.table("attendance").delete().eq("attendance_id", booked_att_id).execute()
+                                                slot_col = "rem_private"
+                                                if "Duo" in target_class_type or "คู่" in target_class_type: slot_col = "rem_duo"
+                                                if "Group" in target_class_type or "กลุ่ม" in target_class_type: slot_col = "rem_group"
                                                 
-                                                confirm_and_activate(att_insert_data, c_id_to_cut, slot_col, new_slots, day_str, active_duration_days)
-                                            else:
+                                                res = supabase.table("courses").select(slot_col).eq("course_id", booked_course_id).execute()
+                                                if res.data:
+                                                    curr_slot = int(res.data[0][slot_col])
+                                                    supabase.table("courses").update({slot_col: curr_slot + 1}).eq("course_id", booked_course_id).execute()
+                                                
+                                                # 2. 🌟 ระบบ Auto-Promotion 🌟 หาคนใน Waitlist มาเสียบแทน
+                                                if max_waitlist > 0:
+                                                    w_res = supabase.table("attendance").select("*").eq("class_id", int(cls_id)).eq("booking_status", "Waitlisted").order("attendance_id").execute()
+                                                    if w_res.data:
+                                                        for w_usr in w_res.data:
+                                                            w_att_id = w_usr["attendance_id"]
+                                                            w_crs_id = w_usr["course_id"]
+                                                            w_mem_id = w_usr["member_id"]
+                                                            
+                                                            # เช็กว่าคอร์สของคนรอ ยังมีสิทธิ์เหลือไหม (เผื่อเขาไปจองคลาสอื่นจนสิทธิ์หมดแล้ว)
+                                                            c_res = supabase.table("courses").select(f"{slot_col}, status, active_duration").eq("course_id", w_crs_id).execute()
+                                                            if c_res.data and int(c_res.data[0][slot_col]) > 0:
+                                                                # เลื่อนคิว! (เปลี่ยนสถานะและหักแต้ม)
+                                                                supabase.table("attendance").update({"booking_status": "Confirmed"}).eq("attendance_id", w_att_id).execute()
+                                                                
+                                                                # 🌟 หากคอร์สเป็น Inactive ให้ทำการ Active ทันที
+                                                                c_status = str(c_res.data[0].get("status", "Inactive"))
+                                                                new_slots_waiter = int(c_res.data[0][slot_col]) - 1
+                                                                
+                                                                if c_status == "Inactive":
+                                                                    active_dur = int(c_res.data[0].get("active_duration", 30))
+                                                                    class_date_obj = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
+                                                                    new_exp = (class_date_obj + datetime.timedelta(days=active_dur)).strftime('%Y-%m-%d')
+                                                                    supabase.table("courses").update({"status": "Active", "expiry_date": new_exp, slot_col: new_slots_waiter}).eq("course_id", w_crs_id).execute()
+                                                                else:
+                                                                    supabase.table("courses").update({slot_col: new_slots_waiter}).eq("course_id", w_crs_id).execute()
+                                                                
+                                                                # แจ้งเตือนแอดมิน
+                                                                mem_name = df_members[df_members["member_id"].astype(str).str.strip() == str(w_mem_id)]["name"].iloc[0]
+                                                                st.session_state["waitlist_promoted_msg"] = f"เลื่อนคิวสำเร็จ: คุณ {mem_name} ได้เป็นตัวจริงในคลาสนี้แล้วและถูกตัดสิทธิ์อัตโนมัติ"
+                                                                break
+                                                            else:
+                                                                # ถ้าสิทธิ์หมดระหว่างรอ ให้ลบชื่อคิวนี้ทิ้ง แล้ววนเช็กคิวถัดไป
+                                                                supabase.table("attendance").delete().eq("attendance_id", w_att_id).execute()
+
+                                                st.cache_data.clear()
+                                                st.rerun()
+                                            except Exception as e:
+                                                st.error(f"❌ Error: {e}")
+                                else:
+                                    # กรณียังไม่ได้จอง
+                                    df_courses.columns = [c.strip() for c in df_courses.columns]
+                                    slot_col = "rem_private"
+                                    if "Duo" in target_class_type or "คู่" in target_class_type: slot_col = "rem_duo"
+                                    if "Group" in target_class_type or "กลุ่ม" in target_class_type: slot_col = "rem_group"
+                                    
+                                    valid_courses = df_courses[
+                                        (df_courses["member_id"].astype(str).str.strip() == m_id) & 
+                                        (df_courses[slot_col].astype(float) > 0) & 
+                                        (df_courses["status"].astype(str).str.strip().isin(["Active", "Inactive"])) & 
+                                        (df_courses["is_deleted"].astype(str).str.strip() == "0")
+                                    ].copy()
+                                    
+                                    if valid_courses.empty:
+                                        st.error(f"❌ ไม่มีสิทธิ์คงเหลือสำหรับ {target_class_type}")
+                                    else:
+                                        valid_courses["clean_signup"] = valid_courses["signup_date"].apply(clean_date_string)
+                                        valid_courses = valid_courses.sort_values(by="clean_signup", ascending=True)
+                                        
+                                        target_course_to_cut = valid_courses.iloc[0]
+                                        c_id_to_cut = int(float(str(target_course_to_cut["course_id"])))
+                                        c_current_status = str(target_course_to_cut.get("status", "Inactive")).strip()
+                                        
+                                        try: active_duration_days = int(float(str(target_course_to_cut.get("active_duration", 30))))
+                                        except: active_duration_days = 30
+                                        
+                                        next_att_id = 1 if (df_attendance.empty or "attendance_id" not in df_attendance.columns) else int(pd.to_numeric(df_attendance["attendance_id"], errors='coerce').fillna(0).max()) + 1
+                                        new_slots = max(0, int(float(str(target_course_to_cut[slot_col]))) - 1)
+                                        
+                                        # 🌟 ปุ่มจองตัวจริง (หักสิทธิ์)
+                                        if conf_count < max_capacity:
+                                            att_insert_data = {
+                                                "attendance_id": next_att_id, "member_id": int(m_id), "class_id": int(cls_id),
+                                                "checkin_date": day_str, "course_id": c_id_to_cut, "booking_status": "Confirmed"
+                                            }
+                                            if st.button("🎟️ จองคลาส (ตัวจริง)", key=f"cut_{cls_id}_{week_idx}_{i}_{c_idx}", type="primary"):
+                                                if c_current_status == "Inactive":
+                                                    @st.dialog("⚠️ ยืนยันการเปิดใช้งานคอร์สเรียนผสม")
+                                                    def confirm_and_activate(att_data, c_id, s_col, n_slots, class_dt_str, days_limit):
+                                                        st.warning("💡 คอร์สผสมนี้ปัจจุบันมีสถานะเป็น Inactive")
+                                                        st.write(f"การเช็กอินเรียนคลาสนี้ในวันที่ **{class_dt_str}** จะเปิดการทำงานคอร์ส (Active) ทันที")
+                                                        class_date_obj = datetime.datetime.strptime(class_dt_str, "%Y-%m-%d").date()
+                                                        calculated_expiry = class_date_obj + datetime.timedelta(days=days_limit)
+                                                        st.info(f"📅 เริ่มนับเวลา **{days_limit} วัน** วันหมดอายุใหม่คือ: **{calculated_expiry.strftime('%Y-%m-%d')}**")
+                                                        
+                                                        if st.button("✅ ยืนยันเปิด Active และหักแต้ม", type="primary", use_container_width=True):
+                                                            try:
+                                                                supabase.table("attendance").insert(att_data).execute()
+                                                                supabase.table("courses").update({s_col: n_slots, "status": "Active", "expiry_date": calculated_expiry.strftime('%Y-%m-%d')}).eq("course_id", c_id).execute()
+                                                                st.cache_data.clear()
+                                                                st.balloons()
+                                                                st.rerun()
+                                                            except Exception as e: st.error(f"❌ Error: {e}")
+                                                    confirm_and_activate(att_insert_data, c_id_to_cut, slot_col, new_slots, day_str, active_duration_days)
+                                                else:
+                                                    try:
+                                                        supabase.table("attendance").insert(att_insert_data).execute()
+                                                        supabase.table("courses").update({slot_col: new_slots}).eq("course_id", c_id_to_cut).execute()
+                                                        st.cache_data.clear()
+                                                        st.balloons()
+                                                        st.rerun()
+                                                    except Exception as e: st.error(f"❌ Error: {e}")
+                                        
+                                        # 🌟 ปุ่มจองคิวสำรอง (ไม่หักสิทธิ์)
+                                        elif wait_count < max_waitlist:
+                                            att_insert_waitlist = {
+                                                "attendance_id": next_att_id, "member_id": int(m_id), "class_id": int(cls_id),
+                                                "checkin_date": day_str, "course_id": c_id_to_cut, "booking_status": "Waitlisted"
+                                            }
+                                            if st.button("📝 ลงคิวสำรอง (Waitlist)", key=f"wait_{cls_id}_{week_idx}_{i}_{c_idx}"):
                                                 try:
-                                                    supabase.table("attendance").insert(att_insert_data).execute()
-                                                    supabase.table("courses").update({slot_col: new_slots}).eq("course_id", c_id_to_cut).execute()
+                                                    supabase.table("attendance").insert(att_insert_waitlist).execute()
                                                     st.cache_data.clear()
-                                                    st.balloons()
+                                                    st.success("📝 ลงชื่อสำรองสำเร็จ! จะไม่ถูกหักสิทธิ์จนกว่าจะได้รับการเลื่อนคิว")
                                                     st.rerun()
                                                 except Exception as e:
                                                     st.error(f"❌ Error: {e}")
@@ -872,6 +972,8 @@ elif choice == "📅 ปฏิทินและประวัติการ�
         df_members_clean = df_members[["member_id", "name", "phone"]].copy()
         df_members_clean.columns = [c.strip() for c in df_members_clean.columns]
         
+        # 🌟 ดึงคอลัมน์สถานะมาโชว์ด้วย
+        df_attendance["booking_status"] = df_attendance.get("booking_status", pd.Series(["Confirmed"] * len(df_attendance))).fillna("Confirmed")
         df_attendance["class_id"] = df_attendance["class_id"].astype(str).str.strip()
         df_classes["class_id"] = df_classes["class_id"].astype(str).str.strip()
         df_attendance["member_id"] = df_attendance["member_id"].astype(str).str.strip()
@@ -887,6 +989,7 @@ elif choice == "📅 ปฏิทินและประวัติการ�
             "member_id": "Member ID",
             "name": "ชื่อลูกค้า",
             "class_name": "ชื่อคลาสเรียน",
+            "booking_status": "สถานะคิว (จอง/สำรอง)",
             "class_type": "ประเภทคลาส (Private/Duo/Group)",
             "instructor": "ครูผู้สอน (Instructor)",
             "course_id": "รหัสคอร์สที่ตัดสิทธิ์"
