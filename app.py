@@ -35,10 +35,16 @@ st.set_page_config(
     page_title="Fitness Admin System Ultra Pro", page_icon="🏋️‍♂️", layout="wide"
 )
 
-# 🔔 แสดงแจ้งเตือนเมื่อมีการเลื่อนคิวอัตโนมัติ (Auto-Promotion)
+# 🔔 แสดงแจ้งเตือนเมื่อมีการเลื่อนคิวอัตโนมัติ (Auto-Promotion) เป็น POP-UP
 if "waitlist_promoted_msg" in st.session_state:
-    st.success(st.session_state["waitlist_promoted_msg"], icon="🔔")
-    del st.session_state["waitlist_promoted_msg"]
+    @st.dialog("🔔 เลื่อนคิวสำรองอัตโนมัติสำเร็จ!")
+    def waitlist_popup():
+        st.success(st.session_state["waitlist_promoted_msg"])
+        st.info("💡 แอดมินสามารถโทรแจ้งลูกค้ารายนี้ว่าได้คิวเป็นตัวจริงแล้ว")
+        if st.button("รับทราบ", type="primary", use_container_width=True):
+            del st.session_state["waitlist_promoted_msg"]
+            st.rerun()
+    waitlist_popup()
 
 def clean_date_string(raw_val):
     if pd.isna(raw_val) or not raw_val:
@@ -865,9 +871,12 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                                 else:
                                                                     supabase.table("courses").update({slot_col: new_slots_waiter}).eq("course_id", w_crs_id).execute()
                                                                 
-                                                                # แจ้งเตือนแอดมิน
-                                                                mem_name = df_members[df_members["member_id"].astype(str).str.strip() == str(w_mem_id)]["name"].iloc[0]
-                                                                st.session_state["waitlist_promoted_msg"] = f"เลื่อนคิวสำเร็จ: คุณ {mem_name} ได้เป็นตัวจริงในคลาสนี้แล้วและถูกตัดสิทธิ์อัตโนมัติ"
+                                                                # 🌟 แจ้งเตือนแอดมินพร้อมดึงเบอร์โทรศัพท์ (POP-UP) 🌟
+                                                                mem_target = df_members[df_members["member_id"].astype(str).str.strip() == str(w_mem_id)]
+                                                                promoted_name = mem_target["name"].iloc[0] if not mem_target.empty else "ไม่ทราบชื่อ"
+                                                                promoted_phone = mem_target["phone"].iloc[0] if not mem_target.empty else "ไม่พบเบอร์โทร"
+                                                                
+                                                                st.session_state["waitlist_promoted_msg"] = f"ระบบได้เลื่อนคิวให้ **คุณ {promoted_name}**\n📞 เบอร์โทร: **{promoted_phone}**\n\nขึ้นเป็นตัวจริงและตัดสิทธิ์คอร์สอัตโนมัติเรียบร้อยแล้ว!"
                                                                 break
                                                             else:
                                                                 # ถ้าสิทธิ์หมดระหว่างรอ ให้ลบชื่อคิวนี้ทิ้ง แล้ววนเช็กคิวถัดไป
