@@ -455,7 +455,7 @@ elif choice == "🛠️ การจัดการคลาส":
                                 st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
 # ==========================================
-# 3. หน้าจัดการตารางคลาสเรียน
+# 3. หน้าจัดการตารางคลาสเรียน (🌟 อัปเดตระบบ Memory)
 # ==========================================
 elif choice == "🏫 จัดการตารางคลาสเรียน":
     st.header("🏫 ระบบบริหารจัดการและวางตารางคลาสเรียน")
@@ -469,15 +469,75 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
     
     with st.expander("➕ เพิ่มตารางคลาสใหม่", expanded=True):
         col_f1, col_f2 = st.columns(2)
+        
+        # --- 🧠 ระบบความจำ (Memory System) ดึงข้อมูลจากคลาสที่เคยสร้าง ---
+        known_classes = []
+        class_memory = {}
+        known_instructors = []
+        
+        if not df_classes_check.empty:
+            for _, row in df_classes_check.iterrows():
+                # ตัดเวลาออกจากชื่อคลาส (เช่น "(10:00 - 11:00)") เพื่อให้จดจำแค่ชื่อเพียวๆ
+                c_full = str(row.get("class_name", ""))
+                c_clean = re.sub(r'\s*\(\d{2}:\d{2}\s*-\s*\d{2}:\d{2}\)$', '', c_full).strip()
+                
+                if c_clean and c_clean not in class_memory:
+                    known_classes.append(c_clean)
+                    class_memory[c_clean] = {
+                        "instructor": str(row.get("instructor", "")).strip(),
+                        "class_type": str(row.get("class_type", "คลาสกลุ่ม (Group)")).strip(),
+                        "class_color": str(row.get("class_color", "#E3F2FD")).strip()
+                    }
+                
+                inst = str(row.get("instructor", "")).strip()
+                if inst and inst not in known_instructors:
+                    known_instructors.append(inst)
+                    
         with col_f1:
             insert_mode = st.radio("รูปแบบการลงตาราง", ["เพิ่มวันเดียวแบบปกติ", "ตั้งตารางประจำ (Routine)"])
-            raw_class_name = st.text_input("ชื่อคลาสเรียน *")
-            instructor = st.text_input("ชื่อครูผู้สอน *")
-            class_type = st.selectbox("ประเภทคลาส *", ["คลาสเดี่ยว (Private)", "คลาสคู่ (Duo)", "คลาสกลุ่ม (Group)"])
+            
+            # 📌 1. เลือกชื่อคลาส (หรือพิมพ์ใหม่)
+            class_options = ["📝 พิมพ์ชื่อคลาสใหม่เอง..."] + known_classes
+            selected_preset = st.selectbox("📌 เลือกจากคลาสที่เคยสร้างไว้ (หรือพิมพ์ใหม่)", class_options)
+            
+            if selected_preset == "📝 พิมพ์ชื่อคลาสใหม่เอง...":
+                raw_class_name = st.text_input("ชื่อคลาสเรียน *")
+                default_type = 2 # ตั้งค่าเริ่มต้นเป็น 'คลาสกลุ่ม (Group)' (index=2)
+                default_color = "#E3F2FD"
+                default_inst_idx = 0
+            else:
+                raw_class_name = selected_preset
+                preset = class_memory[selected_preset]
+                
+                # ดึง index สำหรับประเภทคลาส
+                types_list = ["คลาสเดี่ยว (Private)", "คลาสคู่ (Duo)", "คลาสกลุ่ม (Group)"]
+                default_type = types_list.index(preset["class_type"]) if preset["class_type"] in types_list else 2
+                
+                # ตรวจสอบว่า Code สีถูกต้อง (Hex Color) 
+                default_color = preset["class_color"]
+                if not re.match(r'^#(?:[0-9a-fA-F]{3}){1,2}$', default_color): 
+                    default_color = "#E3F2FD"
+                
+                # ดึง index สำหรับชื่อครูผู้สอน
+                inst_list = ["📝 พิมพ์ชื่อครูใหม่เอง..."] + known_instructors
+                default_inst_idx = inst_list.index(preset["instructor"]) if preset["instructor"] in inst_list else 0
+
+            # 📌 2. เลือกครูผู้สอน
+            inst_options = ["📝 พิมพ์ชื่อครูใหม่เอง..."] + known_instructors
+            sel_inst = st.selectbox("👤 เลือกครูผู้สอน", inst_options, index=default_inst_idx)
+            
+            if sel_inst == "📝 พิมพ์ชื่อครูใหม่เอง...":
+                instructor = st.text_input("ชื่อครูผู้สอน *")
+            else:
+                instructor = sel_inst
+
+            # 📌 3. ประเภทคลาสและสี (ดึงค่าเริ่มต้นจาก Memory)
+            class_type = st.selectbox("ประเภทคลาส *", ["คลาสเดี่ยว (Private)", "คลาสคู่ (Duo)", "คลาสกลุ่ม (Group)"], index=default_type)
             
             time_slots = [f"{h:02d}:00 - {h+1:02d}:00" for h in range(8, 21)]
             selected_time = st.selectbox("⏱️ ระบุเวลาเข้าเรียน *", time_slots, index=11)
-            chosen_color = st.color_picker("🎨 เลือกสีกล่องปฏิทิน", "#E3F2FD")
+            
+            chosen_color = st.color_picker("🎨 เลือกสีกล่องปฏิทิน", default_color)
             
         with col_f2:
             if insert_mode == "เพิ่มวันเดียวแบบปกติ":
