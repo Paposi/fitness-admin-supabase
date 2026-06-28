@@ -155,7 +155,7 @@ st.markdown("---")
 
 menu = [
     "👥 สมัครสมาชิก & เพิ่มคอร์สใหม่",
-    "🛠️ การจัดการคลาส",
+    "🛠️ การจัดการคอร์ส",  # 🌟 เปลี่ยนชื่อเมนูตามที่ขอ
     "🏫 จัดการตารางคลาสเรียน",  
     "🎟️ เช็กอินเข้าเรียน (Auto FIFO)",
     "📅 ปฏิทินและประวัติการเข้าคลาส",
@@ -329,10 +329,10 @@ if choice == "👥 สมัครสมาชิก & เพิ่มคอร�
             st.table(pd.DataFrame(table_data))
 
 # ==========================================
-# 2. หน้าจัดการคลาสและแก้ไขข้อมูลคอร์ส/สมาชิก (อัปเดตใหม่)
+# 2. หน้าจัดการคอร์ส (🌟 เปลี่ยนชื่อเมนู)
 # ==========================================
-elif choice == "🛠️ การจัดการคลาส":
-    st.header("🛠️ การจัดการคลาส แก้ไขข้อมูล และลบรายการ")
+elif choice == "🛠️ การจัดการคอร์ส":
+    st.header("🛠️ การจัดการคอร์ส แก้ไขข้อมูล และลบรายการ")
     if not df_courses.empty:
         df_courses.columns = [c.strip() for c in df_courses.columns]
         df_members_clean = df_members[["member_id", "name", "phone"]].copy()
@@ -455,7 +455,7 @@ elif choice == "🛠️ การจัดการคลาส":
                                 st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
 # ==========================================
-# 3. หน้าจัดการตารางคลาสเรียน (🌟 อัปเดตระบบ Memory)
+# 3. หน้าจัดการตารางคลาสเรียน
 # ==========================================
 elif choice == "🏫 จัดการตารางคลาสเรียน":
     st.header("🏫 ระบบบริหารจัดการและวางตารางคลาสเรียน")
@@ -1026,7 +1026,7 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                     st.error(f"❌ Error: {e}")
 
 # ==========================================
-# 5. หน้าประวัติการเข้าคลาส
+# 5. หน้าประวัติการเข้าคลาส (🌟 เพิ่มคอลัมน์ "เวลาเรียน")
 # ==========================================
 elif choice == "📅 ปฏิทินและประวัติการเข้าคลาส":
     st.header("📅 บันทึกการเข้าคลาสและประวัติภาพรวมหลังบ้าน")
@@ -1049,7 +1049,19 @@ elif choice == "📅 ปฏิทินและประวัติการ�
         df_members_clean["member_id"] = df_members_clean["member_id"].astype(str).str.strip()
         
         df_merged = df_attendance.merge(df_members_clean, on="member_id", how="left")
-        df_final = df_merged.merge(df_classes[["class_id", "class_type", "instructor"]], on="class_id", how="left")
+        # 🌟 ดึงคอลัมน์ class_name ออกมาจาก df_classes ด้วยเพื่อสกัดเวลา
+        df_final = df_merged.merge(df_classes[["class_id", "class_name", "class_type", "instructor"]], on="class_id", how="left")
+        
+        # 🌟 ฟังก์ชันดึง "เวลา" ออกจากชื่อคลาส (เช่น 18:00 - 19:00)
+        def extract_time(c_name):
+            if pd.isna(c_name): return "-"
+            m = re.search(r'\(([\d]{2}:[\d]{2}\s*-\s*[\d]{2}:[\d]{2})\)', str(c_name))
+            return m.group(1) if m else "-"
+            
+        df_final["class_time"] = df_final["class_name"].apply(extract_time)
+        
+        # 🌟 ลบเวลาออกจากคอลัมน์ชื่อคลาสเพื่อให้ดูสะอาดตา
+        df_final["class_name"] = df_final["class_name"].apply(lambda x: re.sub(r'\s*\([\d]{2}:[\d]{2}\s*-\s*[\d]{2}:[\d]{2}\)$', '', str(x)).strip() if pd.notna(x) else str(x))
         
         display_cols = []
         col_map = {
@@ -1060,6 +1072,7 @@ elif choice == "📅 ปฏิทินและประวัติการ�
             "class_name": "ชื่อคลาสเรียน",
             "booking_status": "สถานะคิว (จอง/สำรอง)",
             "class_type": "ประเภทคลาส (Private/Duo/Group)",
+            "class_time": "เวลาเรียน",  # 🌟 เพิ่มคอลัมน์นี้ลงไป
             "instructor": "ครูผู้สอน (Instructor)",
             "course_id": "รหัสคอร์สที่ตัดสิทธิ์"
         }
