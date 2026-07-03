@@ -55,6 +55,11 @@ def clean_date_string(raw_val):
         return match.group(1)
     return val_str
 
+# ฟังก์ชันดึงเวลาสำหรับจัดเรียงคลาสในปฏิทิน
+def extract_start_time(c_name):
+    m = re.search(r'\((\d{2}:\d{2})', str(c_name))
+    return m.group(1) if m else "99:99"
+
 # 🚀 โหลดข้อมูลตรงจาก Supabase (ทำงานเร็วมาก)
 @st.cache_data(ttl=10)
 def load_data_from_supabase(table_name):
@@ -155,7 +160,7 @@ st.markdown("---")
 
 menu = [
     "👥 สมัครสมาชิก & เพิ่มคอร์สใหม่",
-    "🛠️ การจัดการคอร์ส",  # 🌟 เปลี่ยนชื่อเมนูตามที่ขอ
+    "🛠️ การจัดการคอร์ส",  
     "🏫 จัดการตารางคลาสเรียน",  
     "🎟️ เช็กอินเข้าเรียน (Auto FIFO)",
     "📅 ปฏิทินและประวัติการเข้าคลาส",
@@ -329,7 +334,7 @@ if choice == "👥 สมัครสมาชิก & เพิ่มคอร�
             st.table(pd.DataFrame(table_data))
 
 # ==========================================
-# 2. หน้าจัดการคอร์ส (🌟 เปลี่ยนชื่อเมนู)
+# 2. หน้าจัดการคอร์ส
 # ==========================================
 elif choice == "🛠️ การจัดการคอร์ส":
     st.header("🛠️ การจัดการคอร์ส แก้ไขข้อมูล และลบรายการ")
@@ -412,7 +417,6 @@ elif choice == "🛠️ การจัดการคอร์ส":
                 st.warning(f"⚠️ คุณกำลังจะลบคอร์ส: **{target_del['course_name'].iloc[0]}**")
                 if st.button("🚨 ยืนยันการลบคอร์สถาวร", type="primary"):
                     try:
-                        # สามารถใช้คำสั่ง delete() ตรงๆ หรือเปลี่ยนสถานะ is_deleted = 1
                         supabase.table("courses").delete().eq("course_id", int(del_c_id)).execute()
                         st.cache_data.clear()
                         st.success("🗑️ ลบคอร์สเรียบร้อยแล้ว!")
@@ -470,19 +474,21 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
     with st.expander("➕ เพิ่มตารางคลาสใหม่", expanded=True):
         col_f1, col_f2 = st.columns(2)
         
-        # --- 🧠 ระบบความจำ (Memory System) ดึงข้อมูลจากคลาสที่เคยสร้าง ---
+        # --- 🧠 ระบบความจำ (Memory System) จดจำคลาสและสีที่เลือก ---
         known_classes = []
         class_memory = {}
         known_instructors = []
         
         if not df_classes_check.empty:
             for _, row in df_classes_check.iterrows():
-                # ตัดเวลาออกจากชื่อคลาส (เช่น "(10:00 - 11:00)") เพื่อให้จดจำแค่ชื่อเพียวๆ
+                # ตัดเวลาออกจากชื่อคลาส
                 c_full = str(row.get("class_name", ""))
                 c_clean = re.sub(r'\s*\(\d{2}:\d{2}\s*-\s*\d{2}:\d{2}\)$', '', c_full).strip()
                 
-                if c_clean and c_clean not in class_memory:
-                    known_classes.append(c_clean)
+                if c_clean:
+                    if c_clean not in known_classes:
+                        known_classes.append(c_clean)
+                    # 🌟 อัปเดตลง dictionary เสมอเพื่อให้จำค่าใหม่ล่าสุดของคลาสนั้นๆ
                     class_memory[c_clean] = {
                         "instructor": str(row.get("instructor", "")).strip(),
                         "class_type": str(row.get("class_type", "คลาสกลุ่ม (Group)")).strip(),
@@ -502,23 +508,21 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
             
             if selected_preset == "📝 พิมพ์ชื่อคลาสใหม่เอง...":
                 raw_class_name = st.text_input("ชื่อคลาสเรียน *")
-                default_type = 2 # ตั้งค่าเริ่มต้นเป็น 'คลาสกลุ่ม (Group)' (index=2)
+                default_type = 2 
                 default_color = "#E3F2FD"
                 default_inst_idx = 0
             else:
                 raw_class_name = selected_preset
                 preset = class_memory[selected_preset]
                 
-                # ดึง index สำหรับประเภทคลาส
                 types_list = ["คลาสเดี่ยว (Private)", "คลาสคู่ (Duo)", "คลาสกลุ่ม (Group)"]
                 default_type = types_list.index(preset["class_type"]) if preset["class_type"] in types_list else 2
                 
-                # ตรวจสอบว่า Code สีถูกต้อง (Hex Color) 
-                default_color = preset["class_color"]
-                if not re.match(r'^#(?:[0-9a-fA-F]{3}){1,2}$', default_color): 
+                # 🌟 จัดการ Format สีให้ Streamlit ยอมรับ (ต้องเป็น #RRGGBB 7 ตัวอักษร)
+                default_color = str(preset.get("class_color", "#E3F2FD")).strip()
+                if not re.match(r'^#[0-9a-fA-F]{6}$', default_color): 
                     default_color = "#E3F2FD"
                 
-                # ดึง index สำหรับชื่อครูผู้สอน
                 inst_list = ["📝 พิมพ์ชื่อครูใหม่เอง..."] + known_instructors
                 default_inst_idx = inst_list.index(preset["instructor"]) if preset["instructor"] in inst_list else 0
 
@@ -534,8 +538,13 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
             # 📌 3. ประเภทคลาสและสี (ดึงค่าเริ่มต้นจาก Memory)
             class_type = st.selectbox("ประเภทคลาส *", ["คลาสเดี่ยว (Private)", "คลาสคู่ (Duo)", "คลาสกลุ่ม (Group)"], index=default_type)
             
-            time_slots = [f"{h:02d}:00 - {h+1:02d}:00" for h in range(8, 21)]
-            selected_time = st.selectbox("⏱️ ระบุเวลาเข้าเรียน *", time_slots, index=11)
+            # 🌟 อัปเดต: สล็อตเวลา 8:01-9:00, 8:31-9:30, 9:01-10:00 ไปจนถึง 20:31-21:30
+            time_slots = []
+            for h in range(8, 21):
+                time_slots.append(f"{h:02d}:01 - {h+1:02d}:00")
+                time_slots.append(f"{h:02d}:31 - {h+1:02d}:30")
+                
+            selected_time = st.selectbox("⏱️ ระบุเวลาเข้าเรียน *", time_slots, index=4)
             
             chosen_color = st.color_picker("🎨 เลือกสีกล่องปฏิทิน", default_color)
             
@@ -574,30 +583,48 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                     
                     if not df_classes_check.empty:
                         df_classes_check["clean_db_date"] = df_classes_check["class_date"].apply(clean_date_string)
-                        match_time_all = df_classes_check[df_classes_check["class_name"].astype(str).str.contains(f"\\({selected_time}\\)", regex=True)]
+                        
+                        # 🌟 อัปเดต: ระบบป้องกันคลาสทับซ้อนเวลา Overlap (คำนวณจากนาที)
+                        sel_s, sel_e = selected_time.split(" - ")
+                        sel_start_mins = int(sel_s.split(":")[0]) * 60 + int(sel_s.split(":")[1])
+                        sel_end_mins = int(sel_e.split(":")[0]) * 60 + int(sel_e.split(":")[1])
                         
                         for check_date in dates_to_validate:
                             date_str_check = check_date.strftime("%Y-%m-%d")
-                            match_time_slots = match_time_all[match_time_all["clean_db_date"] == date_str_check]
+                            match_date_classes = df_classes_check[df_classes_check["clean_db_date"] == date_str_check]
                             
-                            if not match_time_slots.empty:
-                                for _, db_row in match_time_slots.iterrows():
-                                    db_instructor = str(db_row.get("instructor", "")).strip()
-                                    db_class_type = str(db_row.get("class_type", "")).strip()
+                            for _, db_row in match_date_classes.iterrows():
+                                db_name = str(db_row.get("class_name", ""))
+                                db_instructor = str(db_row.get("instructor", "")).strip()
+                                db_class_type = str(db_row.get("class_type", "")).strip()
+                                
+                                m = re.search(r'\((\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})\)', db_name)
+                                if m:
+                                    db_s_str, db_e_str = m.groups()
+                                    db_s = int(db_s_str.split(":")[0]) * 60 + int(db_s_str.split(":")[1])
+                                    db_e = int(db_e_str.split(":")[0]) * 60 + int(db_e_str.split(":")[1])
                                     
-                                    if db_instructor == instructor.strip():
-                                        has_conflict = True
-                                        conflict_message = f"❌ ไม่สามารถบันทึกได้: ครู **{instructor.strip()}** มีสอนคลาส '{db_row.get('class_name')}' อยู่แล้วในวันที่ {date_str_check} เวลา {selected_time}"
-                                        break
-                                        
-                                    if ("Duo" in class_type or "คู่" in class_type) and ("Group" in db_class_type or "กลุ่ม" in db_class_type):
-                                        has_conflict = True
-                                        conflict_message = f"❌ ไม่สามารถบันทึกได้: มีคลาสประเภท **{db_class_type}** เปิดสอนอยู่แล้วในวันที่ {date_str_check} เวลา {selected_time}"
-                                        break
-                                    if ("Group" in class_type or "กลุ่ม" in class_type) and ("Duo" in db_class_type or "คู่" in db_class_type):
-                                        has_conflict = True
-                                        conflict_message = f"❌ ไม่สามารถบันทึกได้: มีคลาสประเภท **{db_class_type}** เปิดสอนอยู่แล้วในวันที่ {date_str_check} เวลา {selected_time}"
-                                        break
+                                    # เช็กการ Overlap กัน (มีเวลาทับซ้อนกันแม้แต่นาทีเดียว)
+                                    if sel_start_mins < db_e and sel_end_mins > db_s:
+                                        if db_instructor == instructor.strip():
+                                            has_conflict = True
+                                            conflict_message = f"❌ ไม่สามารถบันทึกได้: ครู **{instructor.strip()}** มีสอนคลาส '{db_name}' อยู่แล้ว (เวลาทับซ้อน) ในวันที่ {date_str_check}"
+                                            break
+                                            
+                                        if class_type == db_class_type:
+                                            has_conflict = True
+                                            conflict_message = f"❌ ไม่สามารถบันทึกได้: มีคลาสประเภทเดียวกัน (**{db_class_type}**) เปิดสอนอยู่แล้ว (เวลาทับซ้อน) ในวันที่ {date_str_check}"
+                                            break
+                                            
+                                        if ("Duo" in class_type or "คู่" in class_type) and ("Group" in db_class_type or "กลุ่ม" in db_class_type):
+                                            has_conflict = True
+                                            conflict_message = f"❌ ไม่สามารถบันทึกได้: มีคลาส **{db_class_type}** เปิดสอนอยู่แล้ว (เวลาทับซ้อน) ในวันที่ {date_str_check}"
+                                            break
+                                            
+                                        if ("Group" in class_type or "กลุ่ม" in class_type) and ("Duo" in db_class_type or "คู่" in db_class_type):
+                                            has_conflict = True
+                                            conflict_message = f"❌ ไม่สามารถบันทึกได้: มีคลาส **{db_class_type}** เปิดสอนอยู่แล้ว (เวลาทับซ้อน) ในวันที่ {date_str_check}"
+                                            break
                             if has_conflict: break
                                 
                     if has_conflict:
@@ -651,7 +678,6 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
         booking_counts = {}
         if not df_attendance_check.empty:
             df_attendance_check["class_id_str"] = df_attendance_check["class_id"].astype(str).str.strip()
-            # กรองนับเฉพาะตัวจริง
             df_attendance_check["booking_status"] = df_attendance_check.get("booking_status", pd.Series(["Confirmed"] * len(df_attendance_check))).fillna("Confirmed")
             booking_counts = df_attendance_check[df_attendance_check["booking_status"] == "Confirmed"]["class_id_str"].value_counts().to_dict()
             
@@ -681,6 +707,9 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                         
                         day_str = day.strftime("%Y-%m-%d")
                         match_cls_list = classes_by_date.get(day_str, [])
+                        
+                        # 🌟 อัปเดต: เรียงคลาสตามช่วงเวลาแทนลำดับการ Register
+                        match_cls_list = sorted(match_cls_list, key=extract_start_time)
                         
                         for c_idx, c_row in enumerate(match_cls_list):
                             cls_id = str(int(float(str(c_row["class_id"]))))
@@ -717,7 +746,7 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                                         st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
 # ==========================================
-# 4. หน้าเช็กอินเข้าเรียน (อัปเดตระบบ Waitlist)
+# 4. หน้าเช็กอินเข้าเรียน (Auto FIFO)
 # ==========================================
 elif choice == "🎟️ เช็กอินเข้าเรียน (Auto FIFO)":
     st.header("🎟️ ระบบปฏิทินเช็กอินและคิวสำรอง (Waiting List)")
@@ -768,7 +797,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
             
             if not df_attendance.empty:
                 df_attendance.columns = [c.strip() for c in df_attendance.columns]
-                # Default เป็น Confirmed หากยังไม่มีข้อมูล
                 df_attendance["booking_status"] = df_attendance.get("booking_status", pd.Series(["Confirmed"] * len(df_attendance))).fillna("Confirmed")
                 
                 df_attendance["clean_att_date"] = df_attendance["checkin_date"].apply(clean_date_string)
@@ -816,11 +844,13 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                             day_str = day.strftime("%Y-%m-%d")
                             match_cls = classes_by_date_checkin.get(day_str, [])
                             
+                            # 🌟 อัปเดต: เรียงคลาสตามเวลา
+                            match_cls = sorted(match_cls, key=extract_start_time)
+                            
                             for c_idx, c_row in enumerate(match_cls):
                                 cls_id = str(int(float(str(c_row["class_id"]))))
                                 target_class_type = str(c_row["class_type"]).strip()
                                 
-                                # 🌟 กำหนดความจุ (รวมคิวสำรอง)
                                 max_capacity = 10
                                 max_waitlist = 0
                                 if "Private" in target_class_type or "เดี่ยว" in target_class_type: max_capacity = 1
@@ -878,7 +908,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                 # ปุ่มจัดการการจอง
                                 # =========================
                                 if is_booked:
-                                    # กรณีที่ 1: ลูกค้าอยู่ในคิวสำรอง
                                     if user_book_status == "Waitlisted":
                                         if st.button("🗑️ ยกเลิกคิว (Waitlist)", key=f"del_{cls_id}_{week_idx}_{i}_{c_idx}"):
                                             try:
@@ -889,11 +918,9 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                             except Exception as e:
                                                 st.error(f"❌ Error: {e}")
                                     
-                                    # กรณีที่ 2: ลูกค้าเป็นตัวจริง (กดยกเลิก -> คืนสิทธิ์ -> เลื่อนคิว)
                                     else:
                                         if st.button("🗑️ ยกเลิกคลาส (คืนสิทธิ์)", key=f"del_{cls_id}_{week_idx}_{i}_{c_idx}", type="secondary"):
                                             try:
-                                                # 1. ลบตัวเองและคืนสิทธิ์ให้ตัวเอง
                                                 supabase.table("attendance").delete().eq("attendance_id", booked_att_id).execute()
                                                 slot_col = "rem_private"
                                                 if "Duo" in target_class_type or "คู่" in target_class_type: slot_col = "rem_duo"
@@ -904,7 +931,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                     curr_slot = int(res.data[0][slot_col])
                                                     supabase.table("courses").update({slot_col: curr_slot + 1}).eq("course_id", booked_course_id).execute()
                                                 
-                                                # 2. 🌟 ระบบ Auto-Promotion 🌟 หาคนใน Waitlist มาเสียบแทน
                                                 if max_waitlist > 0:
                                                     w_res = supabase.table("attendance").select("*").eq("class_id", int(cls_id)).eq("booking_status", "Waitlisted").order("attendance_id").execute()
                                                     if w_res.data:
@@ -913,13 +939,10 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                             w_crs_id = w_usr["course_id"]
                                                             w_mem_id = w_usr["member_id"]
                                                             
-                                                            # เช็กว่าคอร์สของคนรอ ยังมีสิทธิ์เหลือไหม (เผื่อเขาไปจองคลาสอื่นจนสิทธิ์หมดแล้ว)
                                                             c_res = supabase.table("courses").select(f"{slot_col}, status, active_duration").eq("course_id", w_crs_id).execute()
                                                             if c_res.data and int(c_res.data[0][slot_col]) > 0:
-                                                                # เลื่อนคิว! (เปลี่ยนสถานะและหักแต้ม)
                                                                 supabase.table("attendance").update({"booking_status": "Confirmed"}).eq("attendance_id", w_att_id).execute()
                                                                 
-                                                                # 🌟 หากคอร์สเป็น Inactive ให้ทำการ Active ทันที
                                                                 c_status = str(c_res.data[0].get("status", "Inactive"))
                                                                 new_slots_waiter = int(c_res.data[0][slot_col]) - 1
                                                                 
@@ -931,7 +954,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                                 else:
                                                                     supabase.table("courses").update({slot_col: new_slots_waiter}).eq("course_id", w_crs_id).execute()
                                                                 
-                                                                # 🌟 แจ้งเตือนแอดมินพร้อมดึงเบอร์โทรศัพท์ (POP-UP) 🌟
                                                                 mem_target = df_members[df_members["member_id"].astype(str).str.strip() == str(w_mem_id)]
                                                                 promoted_name = mem_target["name"].iloc[0] if not mem_target.empty else "ไม่ทราบชื่อ"
                                                                 promoted_phone = mem_target["phone"].iloc[0] if not mem_target.empty else "ไม่พบเบอร์โทร"
@@ -939,7 +961,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                                 st.session_state["waitlist_promoted_msg"] = f"ระบบได้เลื่อนคิวให้ **คุณ {promoted_name}**\n📞 เบอร์โทร: **{promoted_phone}**\n\nขึ้นเป็นตัวจริงและตัดสิทธิ์คอร์สอัตโนมัติเรียบร้อยแล้ว!"
                                                                 break
                                                             else:
-                                                                # ถ้าสิทธิ์หมดระหว่างรอ ให้ลบชื่อคิวนี้ทิ้ง แล้ววนเช็กคิวถัดไป
                                                                 supabase.table("attendance").delete().eq("attendance_id", w_att_id).execute()
 
                                                 st.cache_data.clear()
@@ -947,7 +968,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                             except Exception as e:
                                                 st.error(f"❌ Error: {e}")
                                 else:
-                                    # กรณียังไม่ได้จอง
                                     df_courses.columns = [c.strip() for c in df_courses.columns]
                                     slot_col = "rem_private"
                                     if "Duo" in target_class_type or "คู่" in target_class_type: slot_col = "rem_duo"
@@ -976,7 +996,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                         next_att_id = 1 if (df_attendance.empty or "attendance_id" not in df_attendance.columns) else int(pd.to_numeric(df_attendance["attendance_id"], errors='coerce').fillna(0).max()) + 1
                                         new_slots = max(0, int(float(str(target_course_to_cut[slot_col]))) - 1)
                                         
-                                        # 🌟 ปุ่มจองตัวจริง (หักสิทธิ์)
                                         if conf_count < max_capacity:
                                             att_insert_data = {
                                                 "attendance_id": next_att_id, "member_id": int(m_id), "class_id": int(cls_id),
@@ -1010,7 +1029,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                         st.rerun()
                                                     except Exception as e: st.error(f"❌ Error: {e}")
                                         
-                                        # 🌟 ปุ่มจองคิวสำรอง (ไม่หักสิทธิ์)
                                         elif wait_count < max_waitlist:
                                             att_insert_waitlist = {
                                                 "attendance_id": next_att_id, "member_id": int(m_id), "class_id": int(cls_id),
@@ -1026,7 +1044,7 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                     st.error(f"❌ Error: {e}")
 
 # ==========================================
-# 5. หน้าประวัติการเข้าคลาส (🌟 เพิ่มคอลัมน์ "เวลาเรียน")
+# 5. หน้าประวัติการเข้าคลาส
 # ==========================================
 elif choice == "📅 ปฏิทินและประวัติการเข้าคลาส":
     st.header("📅 บันทึกการเข้าคลาสและประวัติภาพรวมหลังบ้าน")
@@ -1041,7 +1059,6 @@ elif choice == "📅 ปฏิทินและประวัติการ�
         df_members_clean = df_members[["member_id", "name", "phone"]].copy()
         df_members_clean.columns = [c.strip() for c in df_members_clean.columns]
         
-        # 🌟 ดึงคอลัมน์สถานะมาโชว์ด้วย
         df_attendance["booking_status"] = df_attendance.get("booking_status", pd.Series(["Confirmed"] * len(df_attendance))).fillna("Confirmed")
         df_attendance["class_id"] = df_attendance["class_id"].astype(str).str.strip()
         df_classes["class_id"] = df_classes["class_id"].astype(str).str.strip()
@@ -1049,18 +1066,14 @@ elif choice == "📅 ปฏิทินและประวัติการ�
         df_members_clean["member_id"] = df_members_clean["member_id"].astype(str).str.strip()
         
         df_merged = df_attendance.merge(df_members_clean, on="member_id", how="left")
-        # 🌟 ดึงคอลัมน์ class_name ออกมาจาก df_classes ด้วยเพื่อสกัดเวลา
         df_final = df_merged.merge(df_classes[["class_id", "class_name", "class_type", "instructor"]], on="class_id", how="left")
         
-        # 🌟 ฟังก์ชันดึง "เวลา" ออกจากชื่อคลาส (เช่น 18:00 - 19:00)
         def extract_time(c_name):
             if pd.isna(c_name): return "-"
             m = re.search(r'\(([\d]{2}:[\d]{2}\s*-\s*[\d]{2}:[\d]{2})\)', str(c_name))
             return m.group(1) if m else "-"
             
         df_final["class_time"] = df_final["class_name"].apply(extract_time)
-        
-        # 🌟 ลบเวลาออกจากคอลัมน์ชื่อคลาสเพื่อให้ดูสะอาดตา
         df_final["class_name"] = df_final["class_name"].apply(lambda x: re.sub(r'\s*\([\d]{2}:[\d]{2}\s*-\s*[\d]{2}:[\d]{2}\)$', '', str(x)).strip() if pd.notna(x) else str(x))
         
         display_cols = []
@@ -1072,7 +1085,7 @@ elif choice == "📅 ปฏิทินและประวัติการ�
             "class_name": "ชื่อคลาสเรียน",
             "booking_status": "สถานะคิว (จอง/สำรอง)",
             "class_type": "ประเภทคลาส (Private/Duo/Group)",
-            "class_time": "เวลาเรียน",  # 🌟 เพิ่มคอลัมน์นี้ลงไป
+            "class_time": "เวลาเรียน",
             "instructor": "ครูผู้สอน (Instructor)",
             "course_id": "รหัสคอร์สที่ตัดสิทธิ์"
         }
