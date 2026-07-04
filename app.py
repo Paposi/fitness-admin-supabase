@@ -474,10 +474,10 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
     with st.expander("➕ เพิ่มตารางคลาสใหม่", expanded=True):
         col_f1, col_f2 = st.columns(2)
         
-        # --- 🧠 ระบบความจำ (Memory System) จดจำคลาสและสีที่เลือก ---
+        # --- 🧠 ระบบความจำ (Memory System) จดจำสีและประเภทตามชื่อครู ---
         known_classes = []
-        class_memory = {}
         known_instructors = []
+        instructor_memory = {}
         
         if not df_classes_check.empty:
             for _, row in df_classes_check.iterrows():
@@ -485,19 +485,18 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                 c_full = str(row.get("class_name", ""))
                 c_clean = re.sub(r'\s*\(\d{2}:\d{2}\s*-\s*\d{2}:\d{2}\)$', '', c_full).strip()
                 
-                if c_clean:
-                    if c_clean not in known_classes:
-                        known_classes.append(c_clean)
-                    # 🌟 อัปเดตลง dictionary เสมอเพื่อให้จำค่าใหม่ล่าสุดของคลาสนั้นๆ
-                    class_memory[c_clean] = {
-                        "instructor": str(row.get("instructor", "")).strip(),
+                if c_clean and c_clean not in known_classes:
+                    known_classes.append(c_clean)
+                
+                inst = str(row.get("instructor", "")).strip()
+                if inst:
+                    if inst not in known_instructors:
+                        known_instructors.append(inst)
+                    # 🌟 อัปเดตลง dictionary เสมอเพื่อให้จำค่าใหม่ล่าสุดของครูคนนั้นๆ (จำสีและประเภทคลาส)
+                    instructor_memory[inst] = {
                         "class_type": str(row.get("class_type", "คลาสกลุ่ม (Group)")).strip(),
                         "class_color": str(row.get("class_color", "#E3F2FD")).strip()
                     }
-                
-                inst = str(row.get("instructor", "")).strip()
-                if inst and inst not in known_instructors:
-                    known_instructors.append(inst)
                     
         with col_f1:
             insert_mode = st.radio("รูปแบบการลงตาราง", ["เพิ่มวันเดียวแบบปกติ", "ตั้งตารางประจำ (Routine)"])
@@ -508,12 +507,20 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
             
             if selected_preset == "📝 พิมพ์ชื่อคลาสใหม่เอง...":
                 raw_class_name = st.text_input("ชื่อคลาสเรียน *")
-                default_type = 2 
-                default_color = "#E3F2FD"
-                default_inst_idx = 0
             else:
                 raw_class_name = selected_preset
-                preset = class_memory[selected_preset]
+                
+            # 📌 2. เลือกครูผู้สอน (🌟 ย้ายระบบความจำมาที่นี่)
+            inst_options = ["📝 พิมพ์ชื่อครูใหม่เอง..."] + known_instructors
+            sel_inst = st.selectbox("👤 เลือกครูผู้สอน", inst_options)
+            
+            if sel_inst == "📝 พิมพ์ชื่อครูใหม่เอง...":
+                instructor = st.text_input("ชื่อครูผู้สอน *")
+                default_type = 2 
+                default_color = "#E3F2FD"
+            else:
+                instructor = sel_inst
+                preset = instructor_memory[sel_inst]
                 
                 types_list = ["คลาสเดี่ยว (Private)", "คลาสคู่ (Duo)", "คลาสกลุ่ม (Group)"]
                 default_type = types_list.index(preset["class_type"]) if preset["class_type"] in types_list else 2
@@ -522,20 +529,8 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                 default_color = str(preset.get("class_color", "#E3F2FD")).strip()
                 if not re.match(r'^#[0-9a-fA-F]{6}$', default_color): 
                     default_color = "#E3F2FD"
-                
-                inst_list = ["📝 พิมพ์ชื่อครูใหม่เอง..."] + known_instructors
-                default_inst_idx = inst_list.index(preset["instructor"]) if preset["instructor"] in inst_list else 0
 
-            # 📌 2. เลือกครูผู้สอน
-            inst_options = ["📝 พิมพ์ชื่อครูใหม่เอง..."] + known_instructors
-            sel_inst = st.selectbox("👤 เลือกครูผู้สอน", inst_options, index=default_inst_idx)
-            
-            if sel_inst == "📝 พิมพ์ชื่อครูใหม่เอง...":
-                instructor = st.text_input("ชื่อครูผู้สอน *")
-            else:
-                instructor = sel_inst
-
-            # 📌 3. ประเภทคลาสและสี (ดึงค่าเริ่มต้นจาก Memory)
+            # 📌 3. ประเภทคลาสและสี (ดึงค่าเริ่มต้นจาก Memory ของครู)
             class_type = st.selectbox("ประเภทคลาส *", ["คลาสเดี่ยว (Private)", "คลาสคู่ (Duo)", "คลาสกลุ่ม (Group)"], index=default_type)
             
             # 🌟 อัปเดต: สล็อตเวลา 8:01-9:00, 8:31-9:30, 9:01-10:00 ไปจนถึง 20:31-21:30
