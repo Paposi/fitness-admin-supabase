@@ -233,12 +233,16 @@ if choice == "👥 สมัครสมาชิก & เพิ่มคอร�
         if df_members.empty:
             st.info("ยังไม่มีข้อมูลสมาชิกในระบบ")
         else:
+            # 🌟 อัปเดต: เรียงลำดับ dropdown ให้ถูกต้อง
             if "is_deleted" in df_members.columns:
-                active_m = df_members[df_members["is_deleted"].astype(str).str.strip() == "0"]
+                active_m = df_members[df_members["is_deleted"].astype(str).str.strip() == "0"].copy()
             else:
-                active_m = df_members
+                active_m = df_members.copy()
+            
+            active_m["member_id_int"] = pd.to_numeric(active_m["member_id"], errors='coerce').fillna(0).astype(int)
+            active_m = active_m.sort_values(by="member_id_int")
                 
-            m_options = {f"ID {r['member_id']}: คุณ {r['name']}": r for _, r in active_m.iterrows()}
+            m_options = {f"ID {r['member_id_int']}: คุณ {r['name']}": r for _, r in active_m.iterrows()}
             selected_m_label = st.selectbox("เลือกสมาชิกที่ต้องการเพิ่มคอร์ส", list(m_options.keys()))
             m_selected = m_options[selected_m_label]
             
@@ -430,12 +434,16 @@ elif choice == "🛠️ การจัดการคอร์ส":
         with tab_member_edit:
             st.subheader("👤 แก้ไขชื่อและเบอร์โทรศัพท์ของลูกค้า")
             if not df_members.empty:
+                # 🌟 อัปเดต: เรียงลำดับ dropdown ให้ถูกต้อง
                 if "is_deleted" in df_members.columns:
-                    active_m = df_members[df_members["is_deleted"].astype(str).str.strip() == "0"]
+                    active_m = df_members[df_members["is_deleted"].astype(str).str.strip() == "0"].copy()
                 else:
-                    active_m = df_members
+                    active_m = df_members.copy()
+                
+                active_m["member_id_int"] = pd.to_numeric(active_m["member_id"], errors='coerce').fillna(0).astype(int)
+                active_m = active_m.sort_values(by="member_id_int")
                     
-                m_edit_options = {f"ID {r['member_id']}: คุณ {r['name']}": r for _, r in active_m.iterrows()}
+                m_edit_options = {f"ID {r['member_id_int']}: คุณ {r['name']}": r for _, r in active_m.iterrows()}
                 selected_edit_m = st.selectbox("เลือกสมาชิกที่ต้องการแก้ไขข้อมูล", ["-- กรุณาเลือก --"] + list(m_edit_options.keys()))
                 
                 if selected_edit_m != "-- กรุณาเลือก --":
@@ -474,10 +482,10 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
     with st.expander("➕ เพิ่มตารางคลาสใหม่", expanded=True):
         col_f1, col_f2 = st.columns(2)
         
-        # --- 🧠 ระบบความจำ (Memory System) จดจำคลาสและสีที่เลือก ---
+        # --- 🧠 ระบบความจำ (Memory System) จดจำสีและประเภทตามชื่อครู ---
         known_classes = []
-        class_memory = {}
         known_instructors = []
+        instructor_memory = {}
         
         if not df_classes_check.empty:
             for _, row in df_classes_check.iterrows():
@@ -485,19 +493,17 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                 c_full = str(row.get("class_name", ""))
                 c_clean = re.sub(r'\s*\(\d{2}:\d{2}\s*-\s*\d{2}:\d{2}\)$', '', c_full).strip()
                 
-                if c_clean:
-                    if c_clean not in known_classes:
-                        known_classes.append(c_clean)
-                    # 🌟 อัปเดตลง dictionary เสมอเพื่อให้จำค่าใหม่ล่าสุดของคลาสนั้นๆ
-                    class_memory[c_clean] = {
-                        "instructor": str(row.get("instructor", "")).strip(),
+                if c_clean and c_clean not in known_classes:
+                    known_classes.append(c_clean)
+                
+                inst = str(row.get("instructor", "")).strip()
+                if inst:
+                    if inst not in known_instructors:
+                        known_instructors.append(inst)
+                    instructor_memory[inst] = {
                         "class_type": str(row.get("class_type", "คลาสกลุ่ม (Group)")).strip(),
                         "class_color": str(row.get("class_color", "#E3F2FD")).strip()
                     }
-                
-                inst = str(row.get("instructor", "")).strip()
-                if inst and inst not in known_instructors:
-                    known_instructors.append(inst)
                     
         with col_f1:
             insert_mode = st.radio("รูปแบบการลงตาราง", ["เพิ่มวันเดียวแบบปกติ", "ตั้งตารางประจำ (Routine)"])
@@ -508,37 +514,31 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
             
             if selected_preset == "📝 พิมพ์ชื่อคลาสใหม่เอง...":
                 raw_class_name = st.text_input("ชื่อคลาสเรียน *")
-                default_type = 2 
-                default_color = "#E3F2FD"
-                default_inst_idx = 0
             else:
                 raw_class_name = selected_preset
-                preset = class_memory[selected_preset]
+                
+            # 📌 2. เลือกครูผู้สอน
+            inst_options = ["📝 พิมพ์ชื่อครูใหม่เอง..."] + known_instructors
+            sel_inst = st.selectbox("👤 เลือกครูผู้สอน", inst_options)
+            
+            if sel_inst == "📝 พิมพ์ชื่อครูใหม่เอง...":
+                instructor = st.text_input("ชื่อครูผู้สอน *")
+                default_type = 2 
+                default_color = "#E3F2FD"
+            else:
+                instructor = sel_inst
+                preset = instructor_memory[sel_inst]
                 
                 types_list = ["คลาสเดี่ยว (Private)", "คลาสคู่ (Duo)", "คลาสกลุ่ม (Group)"]
                 default_type = types_list.index(preset["class_type"]) if preset["class_type"] in types_list else 2
                 
-                # 🌟 จัดการ Format สีให้ Streamlit ยอมรับ (ต้องเป็น #RRGGBB 7 ตัวอักษร)
                 default_color = str(preset.get("class_color", "#E3F2FD")).strip()
                 if not re.match(r'^#[0-9a-fA-F]{6}$', default_color): 
                     default_color = "#E3F2FD"
-                
-                inst_list = ["📝 พิมพ์ชื่อครูใหม่เอง..."] + known_instructors
-                default_inst_idx = inst_list.index(preset["instructor"]) if preset["instructor"] in inst_list else 0
 
-            # 📌 2. เลือกครูผู้สอน
-            inst_options = ["📝 พิมพ์ชื่อครูใหม่เอง..."] + known_instructors
-            sel_inst = st.selectbox("👤 เลือกครูผู้สอน", inst_options, index=default_inst_idx)
-            
-            if sel_inst == "📝 พิมพ์ชื่อครูใหม่เอง...":
-                instructor = st.text_input("ชื่อครูผู้สอน *")
-            else:
-                instructor = sel_inst
-
-            # 📌 3. ประเภทคลาสและสี (ดึงค่าเริ่มต้นจาก Memory)
+            # 📌 3. ประเภทคลาสและสี (ดึงค่าเริ่มต้นจาก Memory ของครู)
             class_type = st.selectbox("ประเภทคลาส *", ["คลาสเดี่ยว (Private)", "คลาสคู่ (Duo)", "คลาสกลุ่ม (Group)"], index=default_type)
             
-            # 🌟 อัปเดต: สล็อตเวลา 8:01-9:00, 8:31-9:30, 9:01-10:00 ไปจนถึง 20:31-21:30
             time_slots = []
             for h in range(8, 21):
                 time_slots.append(f"{h:02d}:01 - {h+1:02d}:00")
@@ -584,7 +584,6 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                     if not df_classes_check.empty:
                         df_classes_check["clean_db_date"] = df_classes_check["class_date"].apply(clean_date_string)
                         
-                        # 🌟 อัปเดต: ระบบป้องกันคลาสทับซ้อนเวลา Overlap (คำนวณจากนาที)
                         sel_s, sel_e = selected_time.split(" - ")
                         sel_start_mins = int(sel_s.split(":")[0]) * 60 + int(sel_s.split(":")[1])
                         sel_end_mins = int(sel_e.split(":")[0]) * 60 + int(sel_e.split(":")[1])
@@ -604,7 +603,6 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                                     db_s = int(db_s_str.split(":")[0]) * 60 + int(db_s_str.split(":")[1])
                                     db_e = int(db_e_str.split(":")[0]) * 60 + int(db_e_str.split(":")[1])
                                     
-                                    # เช็กการ Overlap กัน (มีเวลาทับซ้อนกันแม้แต่นาทีเดียว)
                                     if sel_start_mins < db_e and sel_end_mins > db_s:
                                         if db_instructor == instructor.strip():
                                             has_conflict = True
@@ -708,7 +706,6 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                         day_str = day.strftime("%Y-%m-%d")
                         match_cls_list = classes_by_date.get(day_str, [])
                         
-                        # 🌟 อัปเดต: เรียงคลาสตามช่วงเวลาแทนลำดับการ Register
                         match_cls_list = sorted(match_cls_list, key=extract_start_time)
                         
                         for c_idx, c_row in enumerate(match_cls_list):
@@ -754,13 +751,33 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
         st.warning("⚠️ ในระบบต้องมีประวัติสมาชิกและคอร์สเรียนก่อนทำรายการ")
     else:
         st.subheader("👤 1. เลือกรายชื่อสมาชิกที่จะทำรายการ")
+        
+        # 🌟 อัปเดต 1: เรียงลำดับ dropdown ให้ถูกต้องตาม member_id
         if "is_deleted" in df_members.columns:
-            active_m = df_members[df_members["is_deleted"].astype(str).str.strip() == "0"]
+            active_m = df_members[df_members["is_deleted"].astype(str).str.strip() == "0"].copy()
         else:
-            active_m = df_members
+            active_m = df_members.copy()
             
-        m_options = {f"ID {r['member_id']}: คุณ {r['name']} (📞 {r['phone']})": r for _, r in active_m.iterrows()}
-        selected_m_label = st.selectbox("ค้นหาและเลือกรายชื่อลูกค้าเพื่อดูสถานะการเช็กอิน", list(m_options.keys()))
+        active_m["member_id_int"] = pd.to_numeric(active_m["member_id"], errors='coerce').fillna(0).astype(int)
+        active_m = active_m.sort_values(by="member_id_int")
+            
+        m_options = {f"ID {r['member_id_int']}: คุณ {r['name']} (📞 {r['phone']})": r for _, r in active_m.iterrows()}
+        options_list = list(m_options.keys())
+        
+        # 🌟 อัปเดต 2: สร้างระบบจำรายชื่อล่าสุดที่เลือก (ป้องกัน Dropdown เด้งกลับไปคนแรก)
+        if "fifo_selected_member" not in st.session_state:
+            st.session_state["fifo_selected_member"] = options_list[0] if options_list else None
+            
+        if st.session_state["fifo_selected_member"] not in options_list and options_list:
+            st.session_state["fifo_selected_member"] = options_list[0]
+            
+        default_idx = options_list.index(st.session_state["fifo_selected_member"]) if options_list else 0
+        
+        selected_m_label = st.selectbox("ค้นหาและเลือกรายชื่อลูกค้าเพื่อดูสถานะการเช็กอิน", options_list, index=default_idx)
+        
+        # อัปเดตค่าเมื่อผู้ใช้เปลี่ยน dropdown 
+        st.session_state["fifo_selected_member"] = selected_m_label
+        
         m_data = m_options[selected_m_label]
         m_id = str(int(float(str(m_data["member_id"]))))
         
@@ -791,7 +808,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
             df_classes_all.columns = [c.strip() for c in df_classes_all.columns]
             df_classes_all["clean_date"] = df_classes_all["class_date"].apply(clean_date_string)
             
-            # 🌟 จัดการข้อมูล Attendance (รอรับคอลัมน์ใหม่ booking_status)
             class_stats = {}
             user_bookings_map = {}
             
@@ -803,7 +819,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                 df_attendance["class_id_str"] = df_attendance["class_id"].astype(str).str.strip()
                 df_attendance["member_id_str"] = df_attendance["member_id"].astype(str).str.strip()
                 
-                # นับสถิติแยกตามคลาส (ตัวจริง vs คิวสำรอง)
                 for _, att_row in df_attendance.iterrows():
                     c_id_stat = att_row["class_id_str"]
                     b_status = att_row["booking_status"]
@@ -844,7 +859,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                             day_str = day.strftime("%Y-%m-%d")
                             match_cls = classes_by_date_checkin.get(day_str, [])
                             
-                            # 🌟 อัปเดต: เรียงคลาสตามเวลา
                             match_cls = sorted(match_cls, key=extract_start_time)
                             
                             for c_idx, c_row in enumerate(match_cls):
@@ -874,20 +888,18 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                     booked_course_id = int(float(str(user_att_row["course_id"])))
                                     user_book_status = user_att_row.get("booking_status", "Confirmed")
 
-                                # ซ่อนคลาสถ้าเต็มทั้งตัวจริงและสำรอง (และผู้ใช้ไม่ได้จองอยู่)
                                 if conf_count >= max_capacity and wait_count >= max_waitlist and not is_booked:
                                     continue  
 
-                                # 🌟 จัดการสีกล่องปฏิทิน
                                 box_bg = c_row.get("class_color", "#E3F2FD")
                                 border_color = "#1E88E5"
                                 
                                 if is_booked:
                                     if user_book_status == "Waitlisted":
-                                        box_bg = "#FFF9C4" # สีเหลืองสำหรับ Waitlist
+                                        box_bg = "#FFF9C4" 
                                         border_color = "#FBC02D"
                                     else:
-                                        box_bg = "#C8E6C9" # สีเขียวสำหรับตัวจริง
+                                        box_bg = "#C8E6C9" 
                                         border_color = "#388E3C"
                                 elif pd.isna(box_bg) or str(box_bg).strip() == "": 
                                     box_bg = "#E3F2FD"
@@ -904,9 +916,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                 </div>
                                 """, unsafe_allow_html=True)
                                 
-                                # =========================
-                                # ปุ่มจัดการการจอง
-                                # =========================
                                 if is_booked:
                                     if user_book_status == "Waitlisted":
                                         if st.button("🗑️ ยกเลิกคิว (Waitlist)", key=f"del_{cls_id}_{week_idx}_{i}_{c_idx}"):
