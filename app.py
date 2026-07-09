@@ -45,16 +45,20 @@ df_members = load_data_from_supabase("members")
 df_courses = load_data_from_supabase("courses")
 df_classes = load_data_from_supabase("classes")
 
+
 # ==========================================
-# 📱 POP-UP: แจ้งเตือนการจองคลาสจากแอป (FlutterFlow)
+# 🚦 ระบบคิว POP-UP (ป้องกัน Error เปิดซ้อนกัน)
 # ==========================================
+active_dialog_exists = False
+
+# 1. POP-UP: แจ้งเตือนการจองคลาสจากแอป (FlutterFlow) ให้อันดับ 1
 if "ff_popup_shown" not in st.session_state:
     st.session_state["ff_popup_shown"] = False
 
 try:
-    # ค้นหารายการที่จองผ่าน App
     ff_res = supabase.table("attendance").select("*").eq("updatefromapp", "Yes").execute()
     if ff_res.data and not st.session_state["ff_popup_shown"]:
+        active_dialog_exists = True  # ล็อกคิวไว้ไม่ให้อันอื่นแทรก
         @st.dialog("📱 มีการจองคลาสใหม่จากแอปพลิเคชัน (FlutterFlow)!")
         def flutterflow_popup(ff_data):
             st.info("💡 ระบบพบรายการจองคลาสใหม่ผ่านแอปพลิเคชัน ดังนี้:")
@@ -64,13 +68,11 @@ try:
                 c_id = str(row.get("class_id", ""))
                 date_val = row.get("checkin_date", "")
                 
-                # แมปหาชื่อลูกค้า
                 m_name = f"ID: {m_id}"
                 if not df_members.empty:
                     match_m = df_members[df_members["member_id"].astype(str).str.strip() == m_id]
                     if not match_m.empty: m_name = match_m.iloc[0]["name"]
                         
-                # แมปหาชื่อคลาส
                 c_name = f"Class ID: {c_id}"
                 if not df_classes.empty:
                     match_c = df_classes[df_classes["class_id"].astype(str).str.strip() == c_id]
@@ -82,7 +84,6 @@ try:
             if st.button("✅ รับทราบและปิดการแจ้งเตือนทั้งหมด", type="primary", use_container_width=True):
                 try:
                     for row in ff_data:
-                        # อัปเดตกลับเป็น No เพื่อไม่ให้แจ้งเตือนซ้ำ
                         supabase.table("attendance").update({"updatefromapp": "No"}).eq("attendance_id", row["attendance_id"]).execute()
                     
                     st.session_state["ff_popup_shown"] = True
@@ -93,10 +94,11 @@ try:
                     
         flutterflow_popup(ff_res.data)
 except Exception:
-    pass # ข้ามไปหากผู้ใช้ยังไม่ได้สร้างคอลัมน์ updatefromapp
+    pass 
 
-# 🔔 POP-UP: แจ้งเตือนการเลื่อนคิว (Auto FIFO)
-if "waitlist_promoted_msg" in st.session_state:
+# 2. POP-UP: แจ้งเตือนการเลื่อนคิว (Auto FIFO)
+if "waitlist_promoted_msg" in st.session_state and not active_dialog_exists:
+    active_dialog_exists = True
     @st.dialog("🔔 เลื่อนคิวสำรองอัตโนมัติสำเร็จ!")
     def waitlist_popup():
         st.success(st.session_state["waitlist_promoted_msg"])
@@ -105,6 +107,7 @@ if "waitlist_promoted_msg" in st.session_state:
             del st.session_state["waitlist_promoted_msg"]
             st.rerun()
     waitlist_popup()
+
 
 def clean_date_string(raw_val):
     if pd.isna(raw_val) or not raw_val: return ""
@@ -116,6 +119,7 @@ def clean_date_string(raw_val):
 def extract_start_time(c_name):
     m = re.search(r'\((\d{2}:\d{2})', str(c_name))
     return m.group(1) if m else "99:99"
+
 
 # ==========================================
 # ตรรกะระบบแจ้งเตือนผลรวมและเวลาหมดอายุ
@@ -152,7 +156,7 @@ def get_advanced_alert_list(df_m, df_c, today):
         total_remaining = 0
         has_expired_but_has_slots = False
         expired_reasons = []
-        alert_course_ids = [] # เก็บไอดีคอร์สที่เป็นตัวการแจ้งเตือน เพื่อเอาไว้ให้ปุ่มกดซ่อน
+        alert_course_ids = [] 
         
         for _, c_row in m_courses.iterrows():
             try: c_id = int(float(str(c_row["course_id"])))
@@ -169,7 +173,6 @@ def get_advanced_alert_list(df_m, df_c, today):
             slots = rem_p + rem_d + rem_g
             total_remaining += slots
             
-            # ถ้าแต้มหมดแล้ว ถือเป็นคอร์สวิกฤตที่ควรกำจัด
             if slots == 0:
                 alert_course_ids.append(c_id)
             
@@ -179,7 +182,7 @@ def get_advanced_alert_list(df_m, df_c, today):
                     exp_date = datetime.datetime.strptime(exp_str, "%Y-%m-%d").date()
                     if today > exp_date and slots > 0:
                         has_expired_but_has_slots = True
-                        alert_course_ids.append(c_id) # เก็บไอดีที่หมดอายุเอาไว้ให้ลบทิ้ง
+                        alert_course_ids.append(c_id) 
                         if c_status == "Inactive":
                             expired_reasons.append(f"คอร์ส {c_row.get('course_name','')} หมดเวลาดองสิทธิ์ แต่เหลือรวม {slots} ครั้ง")
                         else:
@@ -204,7 +207,7 @@ def get_advanced_alert_list(df_m, df_c, today):
                 "id": m_id, "name": m_row["name"], "phone": m_row["phone"],
                 "total_slots": f"{total_remaining} ครั้ง", "status": status,
                 "reason": " | ".join(reason), "is_followed": is_f,
-                "course_ids_to_clear": list(set(alert_course_ids)) # รายการคอร์สที่พร้อมกดปุ่มซ่อน
+                "course_ids_to_clear": list(set(alert_course_ids))
             })
     return alert_data
 
@@ -228,14 +231,16 @@ today_date = datetime.date.today()
 if "cal_shift_manage" not in st.session_state: st.session_state["cal_shift_manage"] = 0  
 if "cal_shift_checkin" not in st.session_state: st.session_state["cal_shift_checkin"] = 0
 
-# POP-UP ตรวจจับสิทธิ์รวมวิกฤตตอนโหลดแอปครั้งแรก
+# 3. POP-UP ตรวจจับสิทธิ์รวมวิกฤตตอนโหลดแอปครั้งแรก
 if "popup_shown" not in st.session_state:
     st.session_state["popup_shown"] = False
 
-if not df_members.empty and not st.session_state["popup_shown"]:
+# ถ้าไม่มีใครล็อกคิวแจ้งเตือนไว้ ถึงจะแสดงแจ้งเตือนนี้ได้
+if not active_dialog_exists and not df_members.empty and not st.session_state["popup_shown"]:
     all_alerts = get_advanced_alert_list(df_members, df_courses, today_date)
     unfollowed_alerts = [a for a in all_alerts if a["is_followed"] == 0]
     if unfollowed_alerts:
+        active_dialog_exists = True
         @st.dialog("🚨 แจ้งเตือนยอดสิทธิ์วิกฤต (< 2 ครั้ง)")
         def show_alert_popup(alerts):
             st.write("พบรายชื่อสมาชิกตรงเงื่อนไขสิทธิ์หมด/วิกฤต (เข้าไปเคลียร์ได้ที่เมนูแจ้งเตือน):")
@@ -287,7 +292,6 @@ if choice == "👥 สมัครสมาชิก & เพิ่มคอร�
             else:
                 active_m = df_members.copy()
             
-            # --- 🌟 เรียงลำดับ dropdown ให้ถูกต้อง 100% (ด้วย Python list) ---
             m_list = []
             for _, r in active_m.iterrows():
                 try: c_id = int(float(str(r["member_id"]).strip()))
@@ -402,7 +406,6 @@ elif choice == "🛠️ การจัดการคอร์ส":
         df_members_clean["member_id"] = df_members_clean["member_id"].astype(str).str.strip()
         df_courses["member_id"] = df_courses["member_id"].astype(str).str.strip()
         
-        # แสดงเฉพาะคอร์สที่ไม่ได้ถูกลบ
         if "is_deleted" in df_courses.columns:
             df_display_c = df_courses[df_courses["is_deleted"].astype(str).str.strip() == "0"].copy()
         else:
@@ -431,7 +434,6 @@ elif choice == "🛠️ การจัดการคอร์ส":
             "📝 แก้ไขสิทธิ์คอร์ส", "🗑️ ลบคอร์สเรียน", "👤 แก้ไขข้อมูลสมาชิก"
         ])
         
-        # --- TAB 1: แก้ไขคอร์ส ---
         with tab_course_edit:
             st.subheader("📝 แก้ไขสิทธิ์และวันหมดอายุรายคอร์ส")
             col_e1, col_e2 = st.columns(2)
@@ -462,7 +464,6 @@ elif choice == "🛠️ การจัดการคอร์ส":
             else:
                 st.info("ระบุ Course ID ด้านบนเพื่อเริ่มการแก้ไข")
 
-        # --- TAB 2: ลบคอร์ส ---
         with tab_course_del:
             st.subheader("🗑️ ลบคอร์สเรียนออกจากระบบ")
             col_d1, col_d2 = st.columns(2)
@@ -483,7 +484,6 @@ elif choice == "🛠️ การจัดการคอร์ส":
             else:
                 st.info("ระบุ Course ID เพื่อค้นหาและลบคอร์ส")
 
-        # --- TAB 3: แก้ไขข้อมูลสมาชิก ---
         with tab_member_edit:
             st.subheader("👤 แก้ไขชื่อและเบอร์โทรศัพท์ของลูกค้า")
             if not df_members.empty:
@@ -1182,7 +1182,6 @@ elif choice == "⚠️ ระบบแจ้งเตือนเงื่อน
                 with col_a:
                     st.markdown(f"**👤 คุณ {item['name']}** ({item['phone']}) - `{item['status']}`\n\n> {item['reason']}")
                 with col_b:
-                    # ถ้ามีคอร์สที่ทำให้เกิดการแจ้งเตือน ให้มีปุ่มกดซ่อน
                     if item.get("course_ids_to_clear"):
                         if st.button("🔕 ซ่อนการแจ้งเตือนนี้", key=f"ack_{item['id']}"):
                             try:
@@ -1195,13 +1194,12 @@ elif choice == "⚠️ ระบบแจ้งเตือนเงื่อน
                 st.divider()
 
 # ==========================================
-# 7. หน้าทำความสะอาดฐานข้อมูล (แก้ไขจาก 4 เดือน เป็น 1 เดือน)
+# 7. หน้าทำความสะอาดฐานข้อมูล
 # ==========================================
 elif choice == "🧹 ล้างคอร์สที่ไม่ได้ใช้งานเกิน 1 เดือน":
     st.header("🧹 ระบบคัดกรองล้างฐานข้อมูลคอร์สที่หมดอายุเกิน 1 เดือน")
     st.info("💡 คอร์สย่อยเก่าๆ ที่หมดอายุไปแล้วมากกว่า 30 วัน จะถูกคัดกรองมาแสดงที่นี่ เพื่อให้แอดมินลบซ่อนโดยไม่กระทบข้อมูลหลัก")
     
-    # กำหนดวันที่ตัดรอบ คือ 30 วันที่แล้ว
     cutoff_date = today_date - relativedelta(days=30)
     
     if df_courses.empty:
@@ -1225,7 +1223,6 @@ elif choice == "🧹 ล้างคอร์สที่ไม่ได้ใ�
         else:
             old_df = pd.DataFrame(old_courses)
             
-            # ดึงชื่อลูกค้ามาประกอบตารางให้ดูง่ายขึ้น
             df_members_clean = df_members[["member_id", "name"]].copy()
             df_members_clean["member_id"] = df_members_clean["member_id"].astype(str).str.strip()
             old_df["member_id"] = old_df["member_id"].astype(str).str.strip()
