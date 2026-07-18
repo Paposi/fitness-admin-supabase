@@ -6,10 +6,65 @@ import streamlit as st
 from supabase import create_client
 from dateutil.relativedelta import relativedelta
 
+# --- CONFIG หน้าเว็บ (ต้องอยู่บรรทัดแรกสุดของ Streamlit) ---
+st.set_page_config(
+    page_title="Fitness Admin System Ultra Pro", page_icon="🏋️‍♂️", layout="wide"
+)
+
 # --- CONFIG SUPABASE ---
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ==========================================
+# 🔐 ระบบ LOGIN และจัดการสิทธิ์ผู้ใช้งาน
+# ==========================================
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+if "username" not in st.session_state:
+    st.session_state["username"] = None
+
+if not st.session_state["authenticated"]:
+    st.markdown("<h2 style='text-align: center;'>🏋️‍♂️ Fitness Admin System</h2>", unsafe_allow_html=True)
+    col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
+    with col_l2:
+        with st.form(key="login_form", clear_on_submit=False):
+            st.subheader("🔐 กรุณาเข้าสู่ระบบ")
+            user_input = st.text_input("Username", placeholder="ระบุชื่อผู้ใช้งาน")
+            pass_input = st.text_input("Password", type="password", placeholder="ระบุรหัสผ่าน")
+            submit_login = st.form_submit_button("เข้าสู่ระบบ", type="primary", use_container_width=True)
+            
+            if submit_login:
+                if not user_input.strip() or not pass_input.strip():
+                    st.error("❌ กรุณากรอกข้อมูลให้ครบถ้วน")
+                else:
+                    try:
+                        res = supabase.table("system_users").select("*").eq("username", user_input.strip()).eq("password", pass_input.strip()).execute()
+                        if res.data:
+                            st.session_state["authenticated"] = True
+                            st.session_state["username"] = user_input.strip()
+                            st.success("🔓 เข้าสู่ระบบสำเร็จ ยินดีต้อนรับครับ!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Username หรือ Password ไม่ถูกต้อง โปรดตรวจสอบอีกครั้ง")
+                    except Exception as e:
+                        st.error(f"❌ เกิดข้อผิดพลาดในการเชื่อมต่อระบบยืนยันตัวตน: {e}")
+    st.stop()
+
+# ==========================================
+# 📝 ฟังก์ชันบันทึกการกระทำ (Audit Logging Helper)
+# ==========================================
+def log_action(action_type, target_table, details):
+    current_user = st.session_state.get("username", "Unknown User")
+    try:
+        supabase.table("audit_logs").insert({
+            "username": current_user,
+            "action_type": action_type,
+            "target_table": target_table,
+            "details": details
+        }).execute()
+    except Exception:
+        pass
 
 # ==========================================
 # 🚀 ระบบป้องกัน Supabase หลับ & Auto-Cleanup
@@ -18,19 +73,23 @@ def initial_system_maintenance():
     try:
         supabase.table("members").select("member_id").limit(1).execute()
         today_str = datetime.date.today().strftime('%Y-%m-%d')
-        supabase.table("attendance").delete().eq("booking_status", "Waitlisted").lt("checkin_date", today_str).execute()
+        check_del = supabase.table("attendance").select("attendance_id").eq("booking_status", "Waitlisted").lt("checkin_date", today_str).execute()
+        if check_del.data:
+            supabase.table("attendance").delete().eq("booking_status", "Waitlisted").lt("checkin_date", today_str).execute()
+            log_action("DELETE (AUTO)", "attendance", f"ล้างคิวค้างสำรองที่เลยกำหนดของวันก่อนหน้าไปทั้งหมด {len(check_del.data)} รายการ")
     except Exception:
         pass
 
 initial_system_maintenance()
-# ==========================================
 
-# --- CONFIG หน้าเว็บ ---
-st.set_page_config(
-    page_title="Fitness Admin System Ultra Pro", page_icon="🏋️‍♂️", layout="wide"
-)
+# ปุ่ม Logout ใน Sidebar
+st.sidebar.markdown(f"👤 ผู้ใช้งานปัจจุบัน: **{st.session_state['username']}**")
+if st.sidebar.button("🚪 ออกจากระบบ (Logout)", type="secondary", use_container_width=True):
+    st.session_state["authenticated"] = False
+    st.session_state["username"] = None
+    st.rerun()
 
-# 🚀 โหลดข้อมูลลงหน่วยความจำก่อน เพื่อให้ Pop-up ต่างๆ ดึงชื่อไปใช้ได้ทันที
+# 🚀 โหลดข้อมูลลงหน่วยความจำ
 @st.cache_data(ttl=10)
 def load_data_from_supabase(table_name):
     try:
@@ -47,22 +106,20 @@ df_classes = load_data_from_supabase("classes")
 
 
 # ==========================================
-# 🚦 ระบบคิว POP-UP (ป้องกัน Error เปิดซ้อนกัน)
+# 🚦 ระบบคิว POP-UP
 # ==========================================
 active_dialog_exists = False
 
-# 1. POP-UP: แจ้งเตือนการจองคลาสจากแอป (FlutterFlow) ให้อันดับ 1
 if "ff_popup_shown" not in st.session_state:
     st.session_state["ff_popup_shown"] = False
 
 try:
     ff_res = supabase.table("attendance").select("*").eq("updatefromapp", "Yes").execute()
     if ff_res.data and not st.session_state["ff_popup_shown"]:
-        active_dialog_exists = True  # ล็อกคิวไว้ไม่ให้อันอื่นแทรก
+        active_dialog_exists = True
         @st.dialog("📱 มีการจองคลาสใหม่จากแอปพลิเคชัน (FlutterFlow)!")
         def flutterflow_popup(ff_data):
             st.info("💡 ระบบพบรายการจองคลาสใหม่ผ่านแอปพลิเคชัน ดังนี้:")
-            
             for row in ff_data:
                 m_id = str(row.get("member_id", ""))
                 c_id = str(row.get("class_id", ""))
@@ -86,17 +143,16 @@ try:
                     for row in ff_data:
                         supabase.table("attendance").update({"updatefromapp": "No"}).eq("attendance_id", row["attendance_id"]).execute()
                     
+                    log_action("UPDATE", "attendance", f"กดยอมรับและปิด Popup แจ้งจองคลาสใหม่จาก FlutterFlow จำนวน {len(ff_data)} รายการ")
                     st.session_state["ff_popup_shown"] = True
                     st.cache_data.clear()
                     st.rerun()
                 except Exception as e:
                     st.error(f"เกิดข้อผิดพลาด: {e}")
-                    
         flutterflow_popup(ff_res.data)
 except Exception:
     pass 
 
-# 2. POP-UP: แจ้งเตือนการเลื่อนคิว (Auto FIFO)
 if "waitlist_promoted_msg" in st.session_state and not active_dialog_exists:
     active_dialog_exists = True
     @st.dialog("🔔 เลื่อนคิวสำรองอัตโนมัติสำเร็จ!")
@@ -122,7 +178,7 @@ def extract_start_time(c_name):
 
 
 # ==========================================
-# ตรรกะระบบแจ้งเตือนผลรวมและเวลาหมดอายุ
+# 🚨 ตรรกะระบบแจ้งเตือนเงื่อนไขพิเศษ
 # ==========================================
 def get_advanced_alert_list(df_m, df_c, today):
     if not isinstance(df_m, pd.DataFrame) or df_m.empty: return []
@@ -153,16 +209,22 @@ def get_advanced_alert_list(df_m, df_c, today):
         if m_id_str not in courses_by_member: continue
         m_courses = courses_by_member[m_id_str]
         
-        total_remaining = 0
-        has_expired_but_has_slots = False
-        expired_reasons = []
+        has_expiring_alerts = False
+        expiring_reasons = []
         alert_course_ids = [] 
         
         for _, c_row in m_courses.iterrows():
             try: c_id = int(float(str(c_row["course_id"])))
             except: continue
             
-            c_status = str(c_row.get("status", "Inactive")).strip()
+            # --- 🎯 ตรวจสอบว่าคอร์สนี้ถูกแอดมินกด "ปิดถาวร" ไปแล้วหรือยัง ---
+            try: is_dismissed = int(float(str(c_row.get("is_alert_dismissed", 0)).strip()))
+            except: is_dismissed = 0
+            
+            if is_dismissed == 1:
+                continue # ข้ามคอร์สนี้ไปเลย ไม่เอามาแจ้งเตือน
+            # -----------------------------------------------------------------
+            
             try: rem_p = int(float(str(c_row.get("rem_private", 0)).strip()))
             except: rem_p = 0
             try: rem_d = int(float(str(c_row.get("rem_duo", 0)).strip()))
@@ -171,42 +233,38 @@ def get_advanced_alert_list(df_m, df_c, today):
             except: rem_g = 0
             
             slots = rem_p + rem_d + rem_g
-            total_remaining += slots
-            
-            if slots == 0:
-                alert_course_ids.append(c_id)
             
             exp_str = clean_date_string(c_row.get("expiry_date", ""))
             if exp_str:
                 try:
                     exp_date = datetime.datetime.strptime(exp_str, "%Y-%m-%d").date()
-                    if today > exp_date and slots > 0:
-                        has_expired_but_has_slots = True
+                    days_left = (exp_date - today).days
+                    
+                    # แจ้งเตือนเมื่อสิทธิ์ > 0 และเวลาเหลือ <= 7 วัน (หรือหมดไปแล้ว)
+                    if slots > 0 and days_left <= 7:
+                        has_expiring_alerts = True
                         alert_course_ids.append(c_id) 
-                        if c_status == "Inactive":
-                            expired_reasons.append(f"คอร์ส {c_row.get('course_name','')} หมดเวลาดองสิทธิ์ แต่เหลือรวม {slots} ครั้ง")
+                        c_name = c_row.get('course_name','')
+                        
+                        if days_left < 0:
+                            expiring_reasons.append(f"คอร์ส {c_name} หมดอายุไปแล้ว (แต่ยังเหลือ {slots} ครั้ง)")
+                        elif days_left == 0:
+                            expiring_reasons.append(f"คอร์ส {c_name} หมดอายุวันนี้! (เหลือ {slots} ครั้ง)")
                         else:
-                            expired_reasons.append(f"คอร์ส {c_row.get('course_name','')} หมดอายุใช้งาน แต่เหลือรวม {slots} ครั้ง")
+                            expiring_reasons.append(f"คอร์ส {c_name} จะหมดอายุในอีก {days_left} วัน (เหลือ {slots} ครั้ง)")
                 except ValueError: continue
 
-        reason = []
         status = "ปกติ"
-        
-        if total_remaining < 2 and len(m_courses) > 0:
-            status = "🚨 สิทธิ์หมด/วิกฤต"
-            reason.append(f"🎟️ ยอดรวมทุกสิทธิ์ในทุกคอร์สเหลือ {total_remaining} ครั้ง")
-            
-        if has_expired_but_has_slots:
-            status = "⚠️ คอร์สหมดอายุแต่สิทธิ์เหลือ"
-            reason.extend(expired_reasons)
+        if has_expiring_alerts:
+            status = "⚠️ คอร์สใกล้หมดเวลา/หมดอายุ แต่สิทธิ์เหลือ"
 
         if status != "ปกติ":
             try: is_f = int(float(str(m_row.get("is_followed", 0)).strip()))
             except: is_f = 0
             alert_data.append({
                 "id": m_id, "name": m_row["name"], "phone": m_row["phone"],
-                "total_slots": f"{total_remaining} ครั้ง", "status": status,
-                "reason": " | ".join(reason), "is_followed": is_f,
+                "status": status,
+                "reason": " | ".join(expiring_reasons), "is_followed": is_f,
                 "course_ids_to_clear": list(set(alert_course_ids))
             })
     return alert_data
@@ -223,7 +281,8 @@ menu = [
     "🎟️ เช็กอินเข้าเรียน (Auto FIFO)",
     "📅 ปฏิทินและประวัติการเข้าคลาส",
     "⚠️ ระบบแจ้งเตือนเงื่อนไขพิเศษ",
-    "🧹 ล้างคอร์สที่ไม่ได้ใช้งานเกิน 1 เดือน"
+    "🧹 ล้างคอร์สที่ไม่ได้ใช้งานเกิน 1 เดือน",
+    "📋 ตรวจสอบประวัติระบบ (Audit Logs)"
 ]
 choice = st.sidebar.selectbox("เมนูจัดการสตูดิโอ", menu)
 today_date = datetime.date.today()
@@ -231,21 +290,20 @@ today_date = datetime.date.today()
 if "cal_shift_manage" not in st.session_state: st.session_state["cal_shift_manage"] = 0  
 if "cal_shift_checkin" not in st.session_state: st.session_state["cal_shift_checkin"] = 0
 
-# 3. POP-UP ตรวจจับสิทธิ์รวมวิกฤตตอนโหลดแอปครั้งแรก
+# 3. POP-UP ตรวจจับคอร์สใกล้หมดเวลา
 if "popup_shown" not in st.session_state:
     st.session_state["popup_shown"] = False
 
-# ถ้าไม่มีใครล็อกคิวแจ้งเตือนไว้ ถึงจะแสดงแจ้งเตือนนี้ได้
 if not active_dialog_exists and not df_members.empty and not st.session_state["popup_shown"]:
     all_alerts = get_advanced_alert_list(df_members, df_courses, today_date)
     unfollowed_alerts = [a for a in all_alerts if a["is_followed"] == 0]
     if unfollowed_alerts:
         active_dialog_exists = True
-        @st.dialog("🚨 แจ้งเตือนยอดสิทธิ์วิกฤต (< 2 ครั้ง)")
+        @st.dialog("⚠️ แจ้งเตือนคอร์สใกล้หมดอายุ (สิทธิ์ยังเหลือ)")
         def show_alert_popup(alerts):
-            st.write("พบรายชื่อสมาชิกตรงเงื่อนไขสิทธิ์หมด/วิกฤต (เข้าไปเคลียร์ได้ที่เมนูแจ้งเตือน):")
+            st.write("พบรายชื่อสมาชิกที่คอร์สใกล้จะหมดเวลาภายใน 7 วัน (หรือหมดไปแล้ว) แต่ยังใช้สิทธิ์ไม่ครบ:")
             for item in alerts:
-                st.markdown(f"- **คุณ {item['name']}** ({item['phone']}) ⮞ `{item['status']}` : {item['reason']}")
+                st.markdown(f"- **คุณ {item['name']}** ({item['phone']})\n  > 📌 {item['reason']}")
             if st.button("รับทราบและปิดหน้าต่าง", type="primary", use_container_width=True):
                 st.session_state["popup_shown"] = True ; st.rerun()
         show_alert_popup(unfollowed_alerts)
@@ -276,6 +334,9 @@ if choice == "👥 สมัครสมาชิก & เพิ่มคอร�
                         "join_date": today_date.strftime('%Y-%m-%d'),
                         "is_deleted": 0
                     }).execute()
+                    
+                    log_action("INSERT", "members", f"สมัครสมาชิกใหม่ ID: {next_m_id} | ชื่อ: {m_name.strip()} | เบอร์โทร: {m_phone.strip()}")
+                    
                     st.cache_data.clear()
                     st.success(f"🎉 ออกรหัสสำเร็จ! Member ID: {next_m_id}")
                     st.rerun()
@@ -340,8 +401,12 @@ if choice == "👥 สมัครสมาชิก & เพิ่มคอร�
                             "active_duration": int(active_days),
                             "expiry_date": inactive_expiry.strftime('%Y-%m-%d'),
                             "status": "Inactive",
-                            "is_deleted": 0
+                            "is_deleted": 0,
+                            "is_alert_dismissed": 0
                         }).execute()
+                        
+                        log_action("INSERT", "courses", f"เปิดคอร์สใหม่ ID: {next_c_id} ให้ลูกค้า ID {m_selected['member_id']} ({m_selected['name']}) | ชื่อคอร์ส: {c_name.strip()} [P:{slots_private}, D:{slots_duo}, G:{slots_group}]")
+                        
                         st.cache_data.clear()
                         st.success(f"🎉 บันทึกคอร์สผสมสำเร็จ! สถานะ: Inactive")
                         st.rerun()
@@ -456,6 +521,9 @@ elif choice == "🛠️ การจัดการคอร์ส":
                             "rem_group": new_g,
                             "expiry_date": new_expiry.strftime('%Y-%m-%d')
                         }).eq("course_id", int(edit_id)).execute()
+                        
+                        log_action("UPDATE", "courses", f"แก้ไขสิทธิ์และวันหมดอายุคอร์ส ID: {edit_id} เป็น [P:{new_p}, D:{new_d}, G:{new_g}] หมดอายุ: {new_expiry}")
+                        
                         st.cache_data.clear()
                         st.success("✅ อัปเดตสิทธิ์ผสมของคอร์สเรียบร้อยแล้ว!")
                         st.rerun()
@@ -476,6 +544,9 @@ elif choice == "🛠️ การจัดการคอร์ส":
                 if st.button("🚨 ยืนยันการลบคอร์สถาวร", type="primary"):
                     try:
                         supabase.table("courses").delete().eq("course_id", int(del_c_id)).execute()
+                        
+                        log_action("DELETE", "courses", f"ลบคอร์สถาวร ID: {del_c_id} | ชื่อคอร์ส: {target_del['course_name'].iloc[0]}")
+                        
                         st.cache_data.clear()
                         st.success("🗑️ ลบคอร์สเรียบร้อยแล้ว!")
                         st.rerun()
@@ -517,6 +588,9 @@ elif choice == "🛠️ การจัดการคอร์ส":
                                     "name": new_name.strip(),
                                     "phone": new_phone.strip()
                                 }).eq("member_id", int(target_m['member_id'])).execute()
+                                
+                                log_action("UPDATE", "members", f"แก้ไขข้อมูลสมาชิก ID: {target_m['member_id']} | เดิม: {target_m['name']} -> ใหม่: {new_name.strip()} ({new_phone.strip()})")
+                                
                                 st.cache_data.clear()
                                 st.success("✅ อัปเดตข้อมูลสมาชิกเรียบร้อยแล้ว!")
                                 st.rerun()
@@ -597,7 +671,6 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                 time_slots.append(f"{h:02d}:31 - {h+1:02d}:30")
                 
             selected_time = st.selectbox("⏱️ ระบุเวลาเข้าเรียน *", time_slots, index=4)
-            
             chosen_color = st.color_picker("🎨 เลือกสีกล่องปฏิทิน", default_color)
             
         with col_f2:
@@ -660,17 +733,14 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                                             has_conflict = True
                                             conflict_message = f"❌ ไม่สามารถบันทึกได้: ครู **{instructor.strip()}** มีสอนคลาส '{db_name}' อยู่แล้ว (เวลาทับซ้อน) ในวันที่ {date_str_check}"
                                             break
-                                            
                                         if class_type == db_class_type:
                                             has_conflict = True
                                             conflict_message = f"❌ ไม่สามารถบันทึกได้: มีคลาสประเภทเดียวกัน (**{db_class_type}**) เปิดสอนอยู่แล้ว (เวลาทับซ้อน) ในวันที่ {date_str_check}"
                                             break
-                                            
                                         if ("Duo" in class_type or "คู่" in class_type) and ("Group" in db_class_type or "กลุ่ม" in db_class_type):
                                             has_conflict = True
                                             conflict_message = f"❌ ไม่สามารถบันทึกได้: มีคลาส **{db_class_type}** เปิดสอนอยู่แล้ว (เวลาทับซ้อน) ในวันที่ {date_str_check}"
                                             break
-                                            
                                         if ("Group" in class_type or "กลุ่ม" in class_type) and ("Duo" in db_class_type or "คู่" in db_class_type):
                                             has_conflict = True
                                             conflict_message = f"❌ ไม่สามารถบันทึกได้: มีคลาส **{db_class_type}** เปิดสอนอยู่แล้ว (เวลาทับซ้อน) ในวันที่ {date_str_check}"
@@ -696,6 +766,9 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                             
                         try:
                             supabase.table("classes").insert(rows_to_insert).execute()
+                            
+                            log_action("INSERT", "classes", f"สร้างตารางคลาสใหม่ ({insert_mode}) รวม {len(rows_to_insert)} วัน | ชื่อคลาส: {class_name_with_time} | ครู: {instructor.strip()}")
+                            
                             st.cache_data.clear()
                             st.success("✨ บันทึกตารางคลาสเรียนสำเร็จและผ่านการตรวจสอบแล้ว!")
                             st.rerun()
@@ -757,7 +830,6 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                         
                         day_str = day.strftime("%Y-%m-%d")
                         match_cls_list = classes_by_date.get(day_str, [])
-                        
                         match_cls_list = sorted(match_cls_list, key=extract_start_time)
                         
                         for c_idx, c_row in enumerate(match_cls_list):
@@ -788,6 +860,9 @@ elif choice == "🏫 จัดการตารางคลาสเรีย�
                                 if st.button("❌ ลบคลาส", key=f"del_cls_{cls_id}_{week_idx}_{i}_{c_idx}", type="secondary", use_container_width=True):
                                     try:
                                         supabase.table("classes").delete().eq("class_id", int(cls_id)).execute()
+                                        
+                                        log_action("DELETE", "classes", f"ลบคลาสเรียนถาวร ID: {cls_id} | คลาส: {c_row.get('class_name','')}")
+                                        
                                         st.cache_data.clear()
                                         st.success("🗑️ ลบคลาสเรียนสำเร็จ!")
                                         st.rerun()
@@ -910,7 +985,6 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                             
                             day_str = day.strftime("%Y-%m-%d")
                             match_cls = classes_by_date_checkin.get(day_str, [])
-                            
                             match_cls = sorted(match_cls, key=extract_start_time)
                             
                             for c_idx, c_row in enumerate(match_cls):
@@ -973,6 +1047,9 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                         if st.button("🗑️ ยกเลิกคิว (Waitlist)", key=f"del_{cls_id}_{week_idx}_{i}_{c_idx}"):
                                             try:
                                                 supabase.table("attendance").delete().eq("attendance_id", booked_att_id).execute()
+                                                
+                                                log_action("DELETE", "attendance", f"ยกเลิกคิวสำรอง (Waitlist) ของสมาชิก ID {m_id} ในคลาส {c_row.get('class_name','')}")
+                                                
                                                 st.cache_data.clear()
                                                 st.success("🗑️ ยกเลิกคิวสำรองสำเร็จ (ไม่ได้เสียสิทธิ์)")
                                                 st.rerun()
@@ -991,6 +1068,8 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                 if res.data:
                                                     curr_slot = int(res.data[0][slot_col])
                                                     supabase.table("courses").update({slot_col: curr_slot + 1}).eq("course_id", booked_course_id).execute()
+                                                
+                                                log_action("DELETE", "attendance", f"ยกเลิกการเข้าเรียน (คืนสิทธิ์) ของสมาชิก ID {m_id} คลาส {c_row.get('class_name','')} | คืนโควตาเข้าคอร์ส ID: {booked_course_id}")
                                                 
                                                 if max_waitlist > 0:
                                                     w_res = supabase.table("attendance").select("*").eq("class_id", int(cls_id)).eq("booking_status", "Waitlisted").order("attendance_id").execute()
@@ -1019,11 +1098,12 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                                 promoted_name = mem_target["name"].iloc[0] if not mem_target.empty else "ไม่ทราบชื่อ"
                                                                 promoted_phone = mem_target["phone"].iloc[0] if not mem_target.empty else "ไม่พบเบอร์โทร"
                                                                 
+                                                                log_action("UPDATE (FIFO)", "attendance", f"ขยับคิวสำรอง อัตโนมัติ: เลื่อนสมาชิก ID {w_mem_id} ({promoted_name}) ขึ้นเป็นตัวจริง คลาส {c_row.get('class_name','')} (หักสิทธิ์คอร์ส ID: {w_crs_id})")
+                                                                
                                                                 st.session_state["waitlist_promoted_msg"] = f"ระบบได้เลื่อนคิวให้ **คุณ {promoted_name}**\n📞 เบอร์โทร: **{promoted_phone}**\n\nขึ้นเป็นตัวจริงและตัดสิทธิ์คอร์สอัตโนมัติเรียบร้อยแล้ว!"
                                                                 break
                                                             else:
                                                                 supabase.table("attendance").delete().eq("attendance_id", w_att_id).execute()
-
                                                 st.cache_data.clear()
                                                 st.rerun()
                                             except Exception as e:
@@ -1076,6 +1156,9 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                             try:
                                                                 supabase.table("attendance").insert(att_data).execute()
                                                                 supabase.table("courses").update({s_col: n_slots, "status": "Active", "expiry_date": calculated_expiry.strftime('%Y-%m-%d')}).eq("course_id", c_id).execute()
+                                                                
+                                                                log_action("INSERT/UPDATE", "attendance/courses", f"จองคลาสตัวจริง สมาชิก ID {m_id} คลาส {c_row.get('class_name','')} | ทำการเปิดใช้งานคอร์ส ID {c_id} ให้เปลี่ยนเป็น Active และหักสิทธิ์สล็อต {s_col} เหลือ {n_slots} ครั้ง")
+                                                                
                                                                 st.cache_data.clear()
                                                                 st.balloons()
                                                                 st.rerun()
@@ -1085,6 +1168,9 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                                     try:
                                                         supabase.table("attendance").insert(att_insert_data).execute()
                                                         supabase.table("courses").update({slot_col: new_slots}).eq("course_id", c_id_to_cut).execute()
+                                                        
+                                                        log_action("INSERT/UPDATE", "attendance/courses", f"จองคลาสตัวจริง สมาชิก ID {m_id} คลาส {c_row.get('class_name','')} | หักสิทธิ์สล็อต {slot_col} ของคอร์ส ID {c_id_to_cut} เหลือ {new_slots} ครั้ง")
+                                                        
                                                         st.cache_data.clear()
                                                         st.balloons()
                                                         st.rerun()
@@ -1098,6 +1184,9 @@ elif choice == "🎟️ เช็กอินเข้าเรียน (Auto F
                                             if st.button("📝 ลงคิวสำรอง (Waitlist)", key=f"wait_{cls_id}_{week_idx}_{i}_{c_idx}"):
                                                 try:
                                                     supabase.table("attendance").insert(att_insert_waitlist).execute()
+                                                    
+                                                    log_action("INSERT", "attendance", f"จองคิวสำรอง (Waitlist) สมาชิก ID {m_id} ในคลาส {c_row.get('class_name','')}")
+                                                    
                                                     st.cache_data.clear()
                                                     st.success("📝 ลงชื่อสำรองสำเร็จ! จะไม่ถูกหักสิทธิ์จนกว่าจะได้รับการเลื่อนคิว")
                                                     st.rerun()
@@ -1167,14 +1256,14 @@ elif choice == "📅 ปฏิทินและประวัติการ�
         st.dataframe(df_display, use_container_width=True, hide_index=True)
 
 # ==========================================
-# 6. หน้าแจ้งเตือนวิกฤต (เพิ่มปุ่มซ่อนการแจ้งเตือน)
+# 6. หน้าแจ้งเตือนวิกฤต
 # ==========================================
 elif choice == "⚠️ ระบบแจ้งเตือนเงื่อนไขพิเศษ":
-    st.header("🚨 หน้ารวมรายชื่อวิกฤต (สิทธิ์รวม < 2 หรือ เวลาหมดแต่สิทธิ์เหลือ)")
+    st.header("🚨 หน้ารวมรายชื่อวิกฤต (เวลาคอร์สเหลือน้อยกว่า 1 สัปดาห์ และสิทธิ์ยังเหลือ)")
     alert_list = get_advanced_alert_list(df_members, df_courses, today_date)
     
     if not alert_list: 
-        st.success("🟢 ทุกคนปกติสุขดีครับ ไม่มีรายการแจ้งเตือนคอร์สวิกฤต")
+        st.success("🟢 ทุกคนปกติสุขดีครับ ไม่มีรายการแจ้งเตือนคอร์สใกล้หมดเวลา")
     else:
         for item in alert_list:
             with st.container():
@@ -1183,10 +1272,14 @@ elif choice == "⚠️ ระบบแจ้งเตือนเงื่อน
                     st.markdown(f"**👤 คุณ {item['name']}** ({item['phone']}) - `{item['status']}`\n\n> {item['reason']}")
                 with col_b:
                     if item.get("course_ids_to_clear"):
-                        if st.button("🔕 ซ่อนการแจ้งเตือนนี้", key=f"ack_{item['id']}"):
+                        # --- 🎯 แก้ปุ่มนี้ให้ทำงานโดยอัปเดตแค่คอลัมน์ is_alert_dismissed = 1 ---
+                        if st.button("🔕 ปิดการแจ้งเตือนนี้ถาวร", key=f"ack_{item['id']}"):
                             try:
                                 for cid in item["course_ids_to_clear"]:
-                                    supabase.table("courses").update({"is_deleted": 1}).eq("course_id", cid).execute()
+                                    supabase.table("courses").update({"is_alert_dismissed": 1}).eq("course_id", cid).execute()
+                                
+                                log_action("UPDATE", "courses", f"แอดมินกดปิดการแจ้งเตือนถาวรของสมาชิก ID {item['id']} คอร์ส IDs: {item['course_ids_to_clear']}")
+                                
                                 st.cache_data.clear()
                                 st.rerun()
                             except Exception as e:
@@ -1222,13 +1315,11 @@ elif choice == "🧹 ล้างคอร์สที่ไม่ได้ใ�
             st.success("✨ ยอดเยี่ยม! ไม่มีคอร์สที่หมดอายุตกค้างเกิน 1 เดือนในระบบ")
         else:
             old_df = pd.DataFrame(old_courses)
-            
             df_members_clean = df_members[["member_id", "name"]].copy()
             df_members_clean["member_id"] = df_members_clean["member_id"].astype(str).str.strip()
             old_df["member_id"] = old_df["member_id"].astype(str).str.strip()
             
             merged_old = old_df.merge(df_members_clean, on="member_id", how="left")
-            
             st.warning(f"⚠️ พบ **{len(merged_old)}** คอร์สที่หมดอายุเกิน 1 เดือนแล้ว:")
             
             display_data = []
@@ -1247,8 +1338,37 @@ elif choice == "🧹 ล้างคอร์สที่ไม่ได้ใ�
                         c_id = int(float(str(row["course_id"])))
                         supabase.table("courses").update({"is_deleted": 1}).eq("course_id", c_id).execute()
                     
+                    log_action("UPDATE (CLEANUP)", "courses", f"ล้างประวัติซ่อนคอร์สเก่าหมดอายุเกิน 1 เดือน รวม {len(merged_old)} คอร์ส")
+                    
                     st.cache_data.clear()
                     st.success("✅ ล้างคอร์สเก่าออกจากระบบเรียบร้อยแล้ว!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ เกิดข้อผิดพลาด: {e}")
+
+# ==========================================
+# 📋 8. หน้าตรวจสอบประวัติระบบ (Audit Logs) -> เมนูใหม่เฉพาะแอดมิน
+# ==========================================
+elif choice == "📋 ตรวจสอบประวัติระบบ (Audit Logs)":
+    st.header("📋 ตรวจสอบประวัติการเข้าใช้งานและแก้ไขข้อมูลของแอดมิน (Audit Logs)")
+    st.info("💡 ข้อมูลในหน้านี้ดึงมาจากตาราง `audit_logs` ใช้สำหรับตรวจสอบว่าใครมาทำการ เพิ่ม/แก้ไข/ลบ ข้อมูลในสตูดิโอ")
+    
+    try:
+        res_logs = supabase.table("audit_logs").select("*").order("created_at", ascending=False).limit(200).execute()
+        if res_logs.data:
+            df_logs = pd.DataFrame(res_logs.data)
+            
+            df_logs.rename(columns={
+                "created_at": "วัน-เวลาที่ทำรายการ",
+                "username": "ผู้ทำรายการ (User)",
+                "action_type": "ประเภทคำสั่ง (Action)",
+                "target_table": "ตารางที่เปลี่ยน",
+                "details": "รายละเอียดทั้งหมด"
+            }, inplace=True)
+            
+            show_cols = ["วัน-เวลาที่ทำรายการ", "ผู้ทำรายการ (User)", "ประเภทคำสั่ง (Action)", "ตารางที่เปลี่ยน", "รายละเอียดทั้งหมด"]
+            st.dataframe(df_logs[show_cols], use_container_width=True, hide_index=True)
+        else:
+            st.info("ยังไม่มีประวัติล็อกกิจกรรมใดๆ ในฐานข้อมูล")
+    except Exception as e:
+        st.error(f"ไม่สามารถโหลดข้อมูลประวัติระบบได้: {e}")
